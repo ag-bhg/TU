@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Buku Tamu Digital</title>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  :root{
+    --ink:#1f2a3c;
+    --ink-2:#2c3a52;
+    --paper:#f2ede1;
+    --paper-2:#e9e1cf;
+    --gold:#a9812f;
+    --maroon:#7a2e2e;
+    --green:#3c6e52;
+    --line:#c9bfa4;
+    --text:#26241c;
+    --muted:#6b6455;
+    --white:#fffdf8;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:'Georgia', 'Iowan Old Style', serif;
+    background:var(--paper);
+    color:var(--text);
+  }
+  body, input, select, button, textarea{
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  h1,h2,h3, .display{
+    font-family:'Georgia','Iowan Old Style', 'Palatino Linotype', serif;
+  }
+  header.app-header{
+    background:var(--ink);
+    color:var(--white);
+    padding:18px 20px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    border-bottom:4px solid var(--gold);
+  }
+  header.app-header .brand{
+    display:flex;
+    align-items:center;
+    gap:10px;
+  }
+  header.app-header .brand .seal{
+    width:34px;height:34px;border-radius:50%;
+    background:var(--gold);
+    display:flex;align-items:center;justify-content:center;
+    font-weight:bold;color:var(--ink);font-family:Georgia,serif;
+    font-size:16px;
+  }
+  header.app-header .brand h1{
+    font-size:18px;margin:0;letter-spacing:.3px;font-weight:600;
+  }
+  header.app-header .who{
+    font-size:12px;color:#cfd6e3;
+    text-align:right;
+  }
+  header.app-header button.logout{
+    background:transparent;border:1px solid #4a5876;color:#dfe4ee;
+    padding:6px 12px;border-radius:4px;font-size:12px;cursor:pointer;
+    margin-top:4px;
+  }
+  main{
+    max-width:900px;
+    margin:0 auto;
+    padding:20px 16px 60px;
+  }
+  .card{
+    background:var(--white);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:20px;
+    margin-bottom:18px;
+    box-shadow:0 1px 3px rgba(31,42,60,0.06);
+  }
+  .card h2{
+    margin-top:0;font-size:17px;color:var(--ink-2);
+    border-bottom:1px solid var(--paper-2);
+    padding-bottom:10px;margin-bottom:14px;
+    display:flex;align-items:center;justify-content:space-between;
+  }
+  label{
+    display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;
+    text-transform:uppercase;letter-spacing:.4px;
+  }
+  input[type=text],input[type=password],input[type=number],select{
+    width:100%;padding:10px 11px;border:1px solid var(--line);
+    border-radius:4px;font-size:14px;background:#fffef9;color:var(--text);
+  }
+  input:focus,select:focus{outline:2px solid var(--gold);outline-offset:1px;}
+  button{
+    cursor:pointer;border:none;border-radius:4px;
+    padding:10px 16px;font-size:14px;font-weight:600;
+  }
+  .btn-primary{background:var(--maroon);color:#fff;}
+  .btn-primary:hover{background:#5f2222;}
+  .btn-secondary{background:var(--ink-2);color:#fff;}
+  .btn-outline{background:transparent;border:1px solid var(--line);color:var(--ink-2);}
+  .btn-danger{background:#a13f3f;color:#fff;}
+  .btn-sm{padding:6px 10px;font-size:12px;}
+  .row{display:flex;gap:10px;flex-wrap:wrap;}
+  .row > *{flex:1;min-width:140px;}
+  .muted{color:var(--muted);font-size:13px;}
+  .badge{
+    display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;
+    font-weight:600;letter-spacing:.3px;
+  }
+  .badge.aktif{background:#e4efe7;color:var(--green);}
+  .badge.expired{background:#f2e3e3;color:var(--maroon);}
+  .badge.belum{background:#f7ecd8;color:var(--gold);}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--paper-2);}
+  th{color:var(--muted);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.4px;}
+  tr:hover td{background:#faf7ef;}
+  .tab-bar{display:flex;gap:6px;margin-bottom:18px;}
+  .tab-bar button{
+    flex:1;background:var(--white);border:1px solid var(--line);color:var(--muted);
+  }
+  .tab-bar button.active{background:var(--ink);color:#fff;border-color:var(--ink);}
+  .center{
+    min-height:70vh;display:flex;align-items:center;justify-content:center;
+    padding:20px;
+  }
+  .login-box{max-width:380px;width:100%;}
+  .login-box .card{margin-bottom:0;}
+  .msg{
+    padding:10px 12px;border-radius:4px;font-size:13px;margin:10px 0;
+  }
+  .msg.error{background:#f6e4e4;color:#7a2e2e;border:1px solid #e3bcbc;}
+  .msg.ok{background:#e6efe8;color:#2f5b41;border:1px solid #bcdcc6;}
+  .qr-box{display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 0;}
+  .qr-box #qrcanvas{background:#fff;padding:12px;border:1px solid var(--line);border-radius:6px;}
+  .token-code{
+    font-family:monospace;font-size:20px;letter-spacing:3px;
+    background:var(--paper-2);padding:8px 14px;border-radius:4px;
+  }
+  .timer{font-size:13px;color:var(--maroon);font-weight:600;}
+  .empty{text-align:center;padding:30px 10px;color:var(--muted);}
+  .footer-note{font-size:11px;color:var(--muted);text-align:center;margin-top:30px;}
+  .config-warning{
+    background:#f6e4e4;color:#7a2e2e;padding:14px 16px;font-size:13px;
+    border-bottom:3px solid var(--maroon);
+  }
+  @media(max-width:520px){
+    .row{flex-direction:column;}
+  }
+</style>
+</head>
+<body>
+
+<div id="configWarning"></div>
+<header class="app-header" id="appHeader" style="display:none;">
+  <div class="brand">
+    <div class="seal">BT</div>
+    <h1>Buku Tamu Digital</h1>
+  </div>
+  <div>
+    <div class="who" id="whoAmI"></div>
+    <button class="logout" id="btnLogout">Keluar</button>
+  </div>
+</header>
+
+<main id="app"></main>
+
+<script>
+/* =========================================================
+   1. KONFIGURASI FIREBASE — GANTI DENGAN CONFIG PROYEK ANDA
+   =========================================================
+   Cara mendapatkan: Firebase Console > Project Settings >
+   scroll ke "Your apps" > Web app > SDK setup and configuration.
+   Lihat file PANDUAN-SETUP.md untuk langkah lengkap.
+*/
+const firebaseConfig = {
+  apiKey: "AIzaSyAmkwpGeqhRdMWrQPa_ahW_gJ27cQ4DZIo",
+  authDomain: "buku-tamu-digital-4df8b.firebaseapp.com",
+  projectId: "buku-tamu-digital-4df8b",
+  storageBucket: "buku-tamu-digital-4df8b.firebasestorage.app",
+  messagingSenderId: "308793150877",
+  appId: "1:308793150877:web:f05f75dbe7b4619b9ab374"
+};
+
+const CONFIG_BELUM_DIISI = firebaseConfig.apiKey === "GANTI_DENGAN_API_KEY";
+
+if(CONFIG_BELUM_DIISI){
+  document.getElementById('configWarning').innerHTML = `
+    <div class="config-warning">
+      ⚠️ <strong>Firebase config belum diisi.</strong> Buka file ini, cari bagian
+      <code>firebaseConfig</code> di dalam tag &lt;script&gt;, lalu ganti dengan config
+      proyek Firebase Anda sendiri. Lihat <strong>PANDUAN-SETUP.md</strong> untuk langkah lengkapnya.
+      Sebelum diisi, aplikasi tidak bisa terhubung ke database.
+    </div>`;
+}
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+// Domain email dummy untuk akun user & adm utama (karena Firebase Auth butuh format email)
+const EMAIL_DOMAIN = "@tamu-undangan.local";
+
+// ================= STATE =================
+let currentUser = null;   // firebase auth user object
+let currentRole = null;   // 'adm_utama' | 'akun_user' | 'adm_sementara'
+let currentUserData = null; // dokumen firestore terkait
+let admSementaraSession = null; // {tokenId, terikat_ke_userId, expired_at}
+let timerInterval = null;
+
+const app = document.getElementById('app');
+const appHeader = document.getElementById('appHeader');
+const whoAmI = document.getElementById('whoAmI');
+
+document.getElementById('btnLogout').onclick = () => {
+  clearInterval(timerInterval);
+  admSementaraSession = null;
+  sessionStorage.removeItem('adm_sementara_token');
+  auth.signOut().then(()=> renderLogin());
+};
+
+// Penangkap error global — supaya kegagalan tidak lagi "diam saja" tanpa pesan
+window.addEventListener('error', (e) => {
+  console.error('Error:', e.message);
+  const c = document.getElementById('loginCard') || document.querySelector('.card');
+  if(c) showMsg(c, 'Terjadi masalah teknis: ' + e.message + '. Coba matikan Brave Shields untuk situs ini, atau pakai browser Chrome.');
+});
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('Promise error:', e.reason);
+  const c = document.getElementById('loginCard') || document.querySelector('.card');
+  const pesan = (e.reason && e.reason.message) ? e.reason.message : String(e.reason);
+  if(c) showMsg(c, 'Gagal terhubung ke server: ' + pesan + '. Coba matikan Brave Shields untuk situs ini, atau pakai browser Chrome.');
+});
+
+// ================= UTIL =================
+function fmtRp(n){
+  n = Number(n||0);
+  return "Rp " + n.toLocaleString('id-ID');
+}
+function fmtWaktu(ts){
+  if(!ts) return '-';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleString('id-ID', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+function randomToken(len=8){
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s='';
+  for(let i=0;i<len;i++) s += chars[Math.floor(Math.random()*chars.length)];
+  return s;
+}
+function showMsg(container, text, type='error'){
+  const el = document.createElement('div');
+  el.className = 'msg ' + type;
+  el.textContent = text;
+  container.prepend(el);
+  setTimeout(()=>el.remove(), 5000);
+}
+
+// ================= ROUTING / INIT =================
+auth.onAuthStateChanged(async (user) => {
+  clearInterval(timerInterval);
+  if(!user){
+    currentUser = null; currentRole = null; currentUserData = null;
+    appHeader.style.display = 'none';
+    renderLogin();
+    return;
+  }
+  currentUser = user;
+
+  // cek apakah dia ADM Utama
+  const admDoc = await db.collection('adm_utama').doc(user.uid).get();
+  if(admDoc.exists){
+    currentRole = 'adm_utama';
+    currentUserData = admDoc.data();
+    appHeader.style.display = 'flex';
+    whoAmI.textContent = 'ADM Utama';
+    renderAdmUtama();
+    return;
+  }
+
+  // cek apakah dia Akun User
+  const userDoc = await db.collection('akun_user').doc(user.uid).get();
+  if(userDoc.exists){
+    currentRole = 'akun_user';
+    currentUserData = userDoc.data();
+    appHeader.style.display = 'flex';
+    whoAmI.textContent = 'Akun User: ' + userDoc.data().username;
+    renderAkunUser();
+    return;
+  }
+
+  // kalau user login anonim tapi punya sesi ADM sementara tersimpan
+  const savedToken = sessionStorage.getItem('adm_sementara_token');
+  if(user.isAnonymous && savedToken){
+    const tokenDoc = await db.collection('qr_tokens').doc(savedToken).get();
+    if(tokenDoc.exists && tokenDoc.data().assigned_uid === user.uid){
+      const data = tokenDoc.data();
+      const expired = data.expired_at.toDate() < new Date();
+      if(!expired && data.status === 'aktif'){
+        currentRole = 'adm_sementara';
+        admSementaraSession = {tokenId: savedToken, ...data};
+        appHeader.style.display = 'flex';
+        whoAmI.textContent = 'ADM Sementara (sesi 36 jam)';
+        renderAdmSementara();
+        return;
+      }
+    }
+  }
+
+  // user anonim tanpa sesi valid -> tampilkan layar scan/masukkan kode
+  appHeader.style.display = 'none';
+  renderLogin();
+});
+
+function renderLogin(){
+  clearInterval(timerInterval);
+  const urlParams = new URLSearchParams(window.location.search);
+  const aksesParam = urlParams.get('akses') || '';
+
+  app.innerHTML = `
+    <div class="center">
+      <div class="login-box">
+        <div class="tab-bar">
+          <button id="tabUser" class="active">Akun User</button>
+          <button id="tabAdm">ADM Utama</button>
+          <button id="tabQr">ADM Sementara (QR)</button>
+        </div>
+        <div id="loginCard" class="card"></div>
+      </div>
+    </div>
+  `;
+  document.getElementById('tabUser').onclick = () => switchTab('user');
+  document.getElementById('tabAdm').onclick = () => switchTab('adm');
+  document.getElementById('tabQr').onclick = () => switchTab('qr');
+
+  function switchTab(which){
+    document.getElementById('tabUser').classList.toggle('active', which==='user');
+    document.getElementById('tabAdm').classList.toggle('active', which==='adm');
+    document.getElementById('tabQr').classList.toggle('active', which==='qr');
+    if(which==='user') renderLoginUser();
+    if(which==='adm') renderLoginAdm();
+    if(which==='qr') renderLoginQr();
+  }
+
+  if(aksesParam){
+    switchTab('qr');
+    setTimeout(()=>{
+      const inp = document.getElementById('qrTokenInput');
+      if(inp) inp.value = aksesParam;
+    }, 0);
+  } else {
+    renderLoginUser();
+  }
+}
+
+function renderLoginUser(){
+  const card = document.getElementById('loginCard');
+  card.innerHTML = `
+    <h2>Login Akun User</h2>
+    <p class="muted">Untuk melihat &amp; melengkapi daftar tamu undangan Anda.</p>
+    <label>Username</label>
+    <input type="text" id="luUsername" autocomplete="username">
+    <label>Password</label>
+    <input type="password" id="luPassword" autocomplete="current-password">
+    <button class="btn-primary" style="margin-top:14px;width:100%;" id="luSubmit">Masuk</button>
+  `;
+  document.getElementById('luSubmit').onclick = async () => {
+    const u = document.getElementById('luUsername').value.trim();
+    const p = document.getElementById('luPassword').value;
+    if(!u || !p) return showMsg(card, 'Username dan password wajib diisi.');
+    const btn = document.getElementById('luSubmit');
+    btn.textContent = 'Menghubungkan...'; btn.disabled = true;
+    try{
+      await auth.signInWithEmailAndPassword(u.toLowerCase() + EMAIL_DOMAIN, p);
+    }catch(e){
+      showMsg(card, 'Login gagal: username atau password salah.');
+      btn.textContent = 'Masuk'; btn.disabled = false;
+    }
+  };
+}
+
+function renderLoginAdm(){
+  const card = document.getElementById('loginCard');
+  card.innerHTML = `
+    <h2>Login ADM Utama</h2>
+    <label>Email</label>
+    <input type="text" id="laEmail" autocomplete="username">
+    <label>Password</label>
+    <input type="password" id="laPassword" autocomplete="current-password">
+    <button class="btn-primary" style="margin-top:14px;width:100%;" id="laSubmit">Masuk</button>
+    <p class="muted" style="margin-top:12px;">Akun ADM Utama dibuat manual sekali lewat Firebase Console. Lihat PANDUAN-SETUP.md.</p>
+  `;
+  document.getElementById('laSubmit').onclick = async () => {
+    const e = document.getElementById('laEmail').value.trim();
+    const p = document.getElementById('laPassword').value;
+    if(!e || !p) return showMsg(card, 'Email dan password wajib diisi.');
+    const btn = document.getElementById('laSubmit');
+    btn.textContent = 'Menghubungkan...'; btn.disabled = true;
+    try{
+      await auth.signInWithEmailAndPassword(e, p);
+    }catch(err){
+      showMsg(card, 'Login gagal: ' + err.message);
+      btn.textContent = 'Masuk'; btn.disabled = false;
+    }
+  };
+}
+
+function renderLoginQr(){
+  const card = document.getElementById('loginCard');
+  card.innerHTML = `
+    <h2>Akses ADM Sementara</h2>
+    <p class="muted">Scan QR yang diberikan ADM Utama dengan kamera/aplikasi scan QR ponsel Anda —
+    ini akan membuka halaman ini otomatis. Atau masukkan kode manual di bawah.</p>
+    <label>Kode Akses</label>
+    <input type="text" id="qrTokenInput" placeholder="Contoh: 7K2P9QRT" style="text-transform:uppercase;">
+    <button class="btn-primary" style="margin-top:14px;width:100%;" id="qrSubmit">Masuk dengan Kode</button>
+  `;
+  document.getElementById('qrSubmit').onclick = async () => {
+    const token = document.getElementById('qrTokenInput').value.trim().toUpperCase();
+    if(!token) return showMsg(card, 'Masukkan kode akses.');
+    try{
+      // sign in anonim DULU — security rules mewajibkan sudah login sebelum baca qr_tokens
+      let anonUser = auth.currentUser;
+      if(!anonUser || !anonUser.isAnonymous){
+        const cred = await auth.signInAnonymously();
+        anonUser = cred.user;
+      }
+      const tokenRef = db.collection('qr_tokens').doc(token);
+      const tokenSnap = await tokenRef.get();
+      if(!tokenSnap.exists) return showMsg(card, 'Kode akses tidak ditemukan.');
+      const data = tokenSnap.data();
+      if(data.status !== 'aktif' || data.expired_at.toDate() < new Date()){
+        return showMsg(card, 'Kode akses sudah kedaluwarsa (lebih dari 36 jam) atau sudah dinonaktifkan.');
+      }
+      // klaim token dalam transaction (1 QR hanya utk 1 ADM sementara)
+      await db.runTransaction(async (tx) => {
+        const fresh = await tx.get(tokenRef);
+        const d = fresh.data();
+        if(d.assigned_uid && d.assigned_uid !== anonUser.uid){
+          throw new Error('Kode akses ini sudah dipakai oleh perangkat lain.');
+        }
+        if(!d.assigned_uid){
+          tx.update(tokenRef, {assigned_uid: anonUser.uid});
+        }
+        // buat/perbarui mapping akses (dipakai oleh security rules)
+        const aksesRef = db.collection('adm_sementara_akses').doc(anonUser.uid);
+        tx.set(aksesRef, {
+          terikat_ke_userId: d.terikat_ke_userId,
+          token_id: token,
+          expired_at: d.expired_at
+        });
+      });
+      sessionStorage.setItem('adm_sementara_token', token);
+      // trigger ulang render lewat onAuthStateChanged
+      location.reload();
+    }catch(e){
+      showMsg(card, e.message || 'Gagal memproses kode akses.');
+    }
+  };
+}
+
+// Hapus log ADM Sementara yang sudah lewat 48 jam (pengganti TTL policy Firestore,
+// supaya tidak perlu billing account). Dijalankan tiap ADM Utama buka aplikasi.
+async function bersihkanLogKedaluwarsa(){
+  try{
+    const now = firebase.firestore.Timestamp.now();
+    const snap = await db.collection('log_adm_sementara')
+      .where('ttl_hapus_pada','<=', now).limit(200).get();
+    if(snap.empty) return;
+    const batch = db.batch();
+    snap.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+  }catch(e){
+    console.warn('Gagal membersihkan log kedaluwarsa:', e.message);
+  }
+}
+
+// ================= ADM UTAMA =================
+async function renderAdmUtama(){
+  bersihkanLogKedaluwarsa();
+
+  app.innerHTML = `
+    <div class="card">
+      <h2>Buat Akun User Baru</h2>
+      <div class="row">
+        <div>
+          <label>Username</label>
+          <input type="text" id="auUsername" placeholder="mis. keluarga-budi">
+        </div>
+        <div>
+          <label>Password</label>
+          <input type="text" id="auPassword" placeholder="min. 6 karakter">
+        </div>
+      </div>
+      <button class="btn-primary" id="auSubmit" style="margin-top:12px;">Buat Akun</button>
+    </div>
+
+    <div class="card">
+      <h2>Daftar Akun User <span class="muted" id="auCount" style="font-size:12px;font-weight:400;"></span></h2>
+      <div id="auList"><p class="empty">Memuat...</p></div>
+    </div>
+
+    <div class="card">
+      <h2>Log Aktivitas ADM Sementara <span class="muted" style="font-size:12px;font-weight:400;">(otomatis terhapus setelah 48 jam)</span></h2>
+      <div id="logList"><p class="empty">Memuat...</p></div>
+    </div>
+  `;
+
+  loadLogList();
+
+  document.getElementById('auSubmit').onclick = async () => {
+    const uEl = document.getElementById('auUsername');
+    const pEl = document.getElementById('auPassword');
+    const username = uEl.value.trim().toLowerCase().replace(/\s+/g,'-');
+    const password = pEl.value;
+    if(!username || password.length < 6){
+      return showMsg(app.querySelector('.card'), 'Username wajib diisi & password minimal 6 karakter.');
+    }
+    try{
+      // buat via secondary auth instance supaya ADM utama tidak ke-signout
+      const secondaryApp = firebase.initializeApp(firebaseConfig, 'secondary-' + Date.now());
+      const secondaryAuth = secondaryApp.auth();
+      const cred = await secondaryAuth.createUserWithEmailAndPassword(username + EMAIL_DOMAIN, password);
+      await db.collection('akun_user').doc(cred.user.uid).set({
+        username: username,
+        dibuat_tanggal: firebase.firestore.FieldValue.serverTimestamp(),
+        kuota_total: 0,
+        kuota_terpakai: 0,
+        dibuat_oleh: currentUser.uid
+      });
+      await secondaryAuth.signOut();
+      await secondaryApp.delete();
+      uEl.value=''; pEl.value='';
+      showMsg(app.querySelector('.card'), 'Akun user "' + username + '" berhasil dibuat.', 'ok');
+      loadAkunUserList();
+    }catch(e){
+      showMsg(app.querySelector('.card'), 'Gagal membuat akun: ' + e.message);
+    }
+  };
+
+  loadAkunUserList();
+}
+
+async function loadLogList(){
+  const el = document.getElementById('logList');
+  if(!el) return;
+  const snap = await db.collection('log_adm_sementara')
+    .orderBy('waktu','desc').limit(30).get();
+  if(snap.empty){
+    el.innerHTML = '<p class="empty">Belum ada aktivitas tercatat.</p>';
+    return;
+  }
+  let rows = '';
+  for(const doc of snap.docs){
+    const d = doc.data();
+    let namaAkun = d.terikat_ke_userId;
+    try{
+      const u = await db.collection('akun_user').doc(d.terikat_ke_userId).get();
+      if(u.exists) namaAkun = u.data().username;
+    }catch(e){}
+    rows += `
+      <tr>
+        <td>${fmtWaktu(d.waktu)}</td>
+        <td><strong>${d.nama_petugas||'-'}</strong></td>
+        <td>${namaAkun}</td>
+        <td>${d.aksi} — ${d.nama_tamu||''}</td>
+      </tr>`;
+  }
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>Waktu</th><th>Petugas</th><th>Akun</th><th>Aksi</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function loadAkunUserList(){
+  const listEl = document.getElementById('auList');
+  const countEl = document.getElementById('auCount');
+  const snap = await db.collection('akun_user').orderBy('dibuat_tanggal','desc').get();
+  countEl.textContent = `(${snap.size} / 300)`;
+  if(snap.empty){
+    listEl.innerHTML = '<p class="empty">Belum ada akun user.</p>';
+    return;
+  }
+  let rows = '';
+  snap.forEach(doc => {
+    const d = doc.data();
+    rows += `
+      <tr>
+        <td><strong>${d.username}</strong><br><span class="muted">${fmtWaktu(d.dibuat_tanggal)}</span></td>
+        <td>${d.kuota_terpakai||0} / ${d.kuota_total||0}</td>
+        <td>
+          <button class="btn-outline btn-sm" onclick="bukaDetailUser('${doc.id}')">Kelola</button>
+        </td>
+      </tr>`;
+  });
+  listEl.innerHTML = `
+    <table>
+      <thead><tr><th>Akun</th><th>Kuota</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function bukaDetailUser(userId){
+  const userDoc = await db.collection('akun_user').doc(userId).get();
+  const d = userDoc.data();
+  const tamuSnap = await db.collection('akun_user').doc(userId).collection('tamu').orderBy('dicatat_pada','desc').get();
+
+  app.innerHTML = `
+    <button class="btn-outline btn-sm" id="backBtn">&larr; Kembali</button>
+    <div class="card" style="margin-top:12px;">
+      <h2>${d.username}</h2>
+      <p class="muted">Dibuat: ${fmtWaktu(d.dibuat_tanggal)} • Kuota: ${d.kuota_terpakai||0} / ${d.kuota_total||0}</p>
+      <div class="row">
+        <button class="btn-secondary" id="genQrBtn">+ Buat QR ADM Sementara</button>
+        <button class="btn-outline" id="addKuotaBtn">+ Tambah Kuota Manual</button>
+      </div>
+      <div id="detailMsgArea"></div>
+    </div>
+
+    <div class="card" id="qrArea" style="display:none;"></div>
+
+    <div class="card">
+      <h2>Riwayat QR ADM Sementara</h2>
+      <div id="tokenList"><p class="empty">Memuat...</p></div>
+    </div>
+
+    <div class="card">
+      <h2>Data Tamu (${tamuSnap.size})</h2>
+      <div id="tamuListAdm"></div>
+    </div>
+  `;
+
+  document.getElementById('backBtn').onclick = renderAdmUtama;
+
+  document.getElementById('genQrBtn').onclick = () => buatQrToken(userId);
+  document.getElementById('addKuotaBtn').onclick = async () => {
+    const jumlah = prompt('Tambah berapa kuota untuk akun ini?', '500');
+    if(!jumlah || isNaN(jumlah)) return;
+    await db.collection('akun_user').doc(userId).update({
+      kuota_total: firebase.firestore.FieldValue.increment(parseInt(jumlah))
+    });
+    showMsg(document.getElementById('detailMsgArea'), `Kuota +${jumlah} ditambahkan.`, 'ok');
+    bukaDetailUser(userId);
+  };
+
+  loadTokenList(userId);
+
+  // render tabel tamu (adm utama boleh edit langsung)
+  const tamuListEl = document.getElementById('tamuListAdm');
+  if(tamuSnap.empty){
+    tamuListEl.innerHTML = '<p class="empty">Belum ada data tamu.</p>';
+  } else {
+    let rows = '';
+    tamuSnap.forEach(doc => {
+      const t = doc.data();
+      rows += `
+        <tr>
+          <td>${t.nama}</td>
+          <td>${t.alamat||'-'}</td>
+          <td>${fmtRp(t.rp)}</td>
+          <td><span class="badge ${t.status==='sudah'?'aktif':'belum'}">${t.status==='sudah'?'Sudah kembali':'Belum'}</span></td>
+          <td><button class="btn-outline btn-sm" onclick="editTamuAdm('${userId}','${doc.id}')">Edit</button></td>
+        </tr>`;
+    });
+    tamuListEl.innerHTML = `
+      <table>
+        <thead><tr><th>Nama</th><th>Alamat</th><th>Sumbangan</th><th>Status</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+}
+
+window.bukaDetailUser = bukaDetailUser;
+
+async function buatQrToken(userId){
+  const namaPetugas = prompt('Nama petugas ADM Sementara (untuk catatan log):');
+  if(namaPetugas === null || namaPetugas.trim() === '') return;
+  const tokenId = randomToken(8);
+  const expiredAt = new Date(Date.now() + 36*60*60*1000);
+  await db.collection('qr_tokens').doc(tokenId).set({
+    terikat_ke_userId: userId,
+    nama_petugas: namaPetugas.trim(),
+    dibuat_at: firebase.firestore.FieldValue.serverTimestamp(),
+    expired_at: firebase.firestore.Timestamp.fromDate(expiredAt),
+    assigned_uid: null,
+    status: 'aktif',
+    settled: false,
+    dibuat_oleh: currentUser.uid
+  });
+
+  const qrArea = document.getElementById('qrArea');
+  qrArea.style.display = 'block';
+  const linkUrl = window.location.origin + window.location.pathname + '?akses=' + tokenId;
+  qrArea.innerHTML = `
+    <h2>QR ADM Sementara Baru</h2>
+    <div class="qr-box">
+      <div id="qrcanvas"></div>
+      <div class="token-code">${tokenId}</div>
+      <p class="muted">Berlaku 36 jam sejak sekarang (sampai ${fmtWaktu(firebase.firestore.Timestamp.fromDate(expiredAt))}).</p>
+      <p class="muted">Scan QR ini, atau buka tautan: <br><code style="word-break:break-all;">${linkUrl}</code></p>
+    </div>
+  `;
+  new QRCode(document.getElementById('qrcanvas'), {
+    text: linkUrl, width: 200, height: 200
+  });
+
+  loadTokenList(userId);
+}
+
+async function loadTokenList(userId){
+  const el = document.getElementById('tokenList');
+  const snap = await db.collection('qr_tokens')
+    .where('terikat_ke_userId','==',userId)
+    .orderBy('dibuat_at','desc').limit(20).get();
+  if(snap.empty){
+    el.innerHTML = '<p class="empty">Belum ada QR yang dibuat untuk akun ini.</p>';
+    return;
+  }
+  let rows = '';
+  snap.forEach(doc => {
+    const d = doc.data();
+    const expired = d.expired_at.toDate() < new Date();
+    const statusLabel = expired ? 'Kedaluwarsa' : (d.assigned_uid ? 'Aktif dipakai' : 'Menunggu scan');
+    const badgeClass = expired ? 'expired' : (d.assigned_uid ? 'aktif' : 'belum');
+    const bisaDibuka = !expired; // QR yang belum kedaluwarsa bisa dibuka lagi
+    rows += `
+      <tr ${bisaDibuka?`onclick="tampilkanUlangQr('${doc.id}')" style="cursor:pointer;"`:''}>
+        <td>
+          <strong style="font-size:15px;color:var(--ink-2);">${d.nama_petugas||'(tanpa nama)'}</strong><br>
+          <span class="token-code" style="font-size:12px;">${doc.id}</span>
+        </td>
+        <td>${fmtWaktu(d.expired_at)}</td>
+        <td><span class="badge ${badgeClass}">${statusLabel}</span></td>
+      </tr>`;
+  });
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>Petugas / Kode</th><th>Berlaku s/d</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p class="muted" style="margin-top:8px;font-size:11px;">Tap baris yang masih berlaku untuk menampilkan ulang QR-nya.</p>`;
+}
+
+async function tampilkanUlangQr(tokenId){
+  const doc = await db.collection('qr_tokens').doc(tokenId).get();
+  const d = doc.data();
+  const qrArea = document.getElementById('qrArea');
+  if(!qrArea) return;
+  qrArea.style.display = 'block';
+  qrArea.scrollIntoView({behavior:'smooth'});
+  const linkUrl = window.location.origin + window.location.pathname + '?akses=' + tokenId;
+  qrArea.innerHTML = `
+    <h2>QR — ${d.nama_petugas||'(tanpa nama)'}</h2>
+    <div class="qr-box">
+      <div id="qrcanvas"></div>
+      <div class="token-code">${tokenId}</div>
+      <p class="muted">Berlaku sampai ${fmtWaktu(d.expired_at)}.</p>
+      <p class="muted">Scan QR ini, atau buka tautan: <br><code style="word-break:break-all;">${linkUrl}</code></p>
+    </div>
+  `;
+  new QRCode(document.getElementById('qrcanvas'), {
+    text: linkUrl, width: 200, height: 200
+  });
+}
+window.tampilkanUlangQr = tampilkanUlangQr;
+
+async function editTamuAdm(userId, tamuId){
+  const ref = db.collection('akun_user').doc(userId).collection('tamu').doc(tamuId);
+  const doc = await ref.get();
+  const t = doc.data();
+  const nama = prompt('Nama:', t.nama); if(nama===null) return;
+  const alamat = prompt('Alamat:', t.alamat||''); if(alamat===null) return;
+  const rp = prompt('Nominal sumbangan (Rp):', t.rp||0); if(rp===null) return;
+  const sudahKembali = confirm('Status sudah dikembalikan? OK = Sudah, Cancel = Belum');
+  await ref.update({
+    nama, alamat, rp: parseInt(rp)||0,
+    status: sudahKembali ? 'sudah' : 'belum'
+  });
+  bukaDetailUser(userId);
+}
+window.editTamuAdm = editTamuAdm;
+
+// ================= AKUN USER =================
+async function renderAkunUser(){
+  await settleKuotaJikaAda(currentUser.uid);
+  const userDoc = await db.collection('akun_user').doc(currentUser.uid).get();
+  currentUserData = userDoc.data();
+
+  const tamuSnap = await db.collection('akun_user').doc(currentUser.uid)
+    .collection('tamu').orderBy('dicatat_pada','desc').get();
+
+  const kuotaTerpakai = currentUserData.kuota_terpakai || 0;
+  const kuotaTotal = currentUserData.kuota_total || 0;
+  const sisaKuota = kuotaTotal - kuotaTerpakai;
+
+  app.innerHTML = `
+    <div class="card">
+      <h2>Kuota Data Tamu</h2>
+      <p>${kuotaTerpakai} terpakai dari ${kuotaTotal} kuota. Sisa: <strong>${sisaKuota}</strong></p>
+      ${sisaKuota <= 0 ? '<p class="msg error">Kuota habis. Hubungi ADM Utama untuk penambahan kuota.</p>' : ''}
+    </div>
+
+    <div class="card">
+      <h2>Tambah Tamu</h2>
+      <div class="row">
+        <div><label>Nama</label><input type="text" id="tuNama"></div>
+        <div><label>Alamat</label><input type="text" id="tuAlamat"></div>
+      </div>
+      <div class="row">
+        <div><label>Nominal Sumbangan (Rp)</label><input type="number" id="tuRp" min="0"></div>
+        <div><label>Status</label>
+          <select id="tuStatus">
+            <option value="belum">Belum kembali</option>
+            <option value="sudah">Sudah kembali</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn-primary" id="tuSubmit" style="margin-top:12px;" ${sisaKuota<=0?'disabled':''}>Simpan Tamu</button>
+    </div>
+
+    <div class="card">
+      <h2>Daftar Tamu (${tamuSnap.size})</h2>
+      <div id="tamuListUser"></div>
+    </div>
+  `;
+
+  document.getElementById('tuSubmit').onclick = async () => {
+    const nama = document.getElementById('tuNama').value.trim();
+    const alamat = document.getElementById('tuAlamat').value.trim();
+    const rp = parseInt(document.getElementById('tuRp').value)||0;
+    const status = document.getElementById('tuStatus').value;
+    if(!nama) return showMsg(app.querySelector('.card'), 'Nama wajib diisi.');
+    await db.collection('akun_user').doc(currentUser.uid).collection('tamu').add({
+      nama, alamat, rp, status,
+      permanen: true,
+      dicatat_oleh: 'user',
+      dicatat_pada: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('akun_user').doc(currentUser.uid).update({
+      kuota_terpakai: firebase.firestore.FieldValue.increment(1)
+    });
+    renderAkunUser();
+  };
+
+  const listEl = document.getElementById('tamuListUser');
+  if(tamuSnap.empty){
+    listEl.innerHTML = '<p class="empty">Belum ada data tamu.</p>';
+  } else {
+    let rows = '';
+    tamuSnap.forEach(doc => {
+      const t = doc.data();
+      rows += `
+        <tr>
+          <td>${t.nama}</td>
+          <td>${t.alamat||'-'}</td>
+          <td>${fmtRp(t.rp)}</td>
+          <td><span class="badge ${t.status==='sudah'?'aktif':'belum'}">${t.status==='sudah'?'Sudah':'Belum'}</span></td>
+          <td>${t.dicatat_oleh==='user' ? `<button class="btn-outline btn-sm" onclick="editTamuUser('${doc.id}')">Edit</button>` : '<span class="muted" style="font-size:11px;">via ADM Sementara</span>'}</td>
+        </tr>`;
+    });
+    listEl.innerHTML = `
+      <table>
+        <thead><tr><th>Nama</th><th>Alamat</th><th>Sumbangan</th><th>Status</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+}
+
+async function editTamuUser(tamuId){
+  const ref = db.collection('akun_user').doc(currentUser.uid).collection('tamu').doc(tamuId);
+  const doc = await ref.get();
+  const t = doc.data();
+  const nama = prompt('Nama:', t.nama); if(nama===null) return;
+  const alamat = prompt('Alamat:', t.alamat||''); if(alamat===null) return;
+  const rp = prompt('Nominal sumbangan (Rp):', t.rp||0); if(rp===null) return;
+  const sudahKembali = confirm('Status sudah dikembalikan? OK = Sudah, Cancel = Belum');
+  await ref.update({ nama, alamat, rp: parseInt(rp)||0, status: sudahKembali?'sudah':'belum' });
+  renderAkunUser();
+}
+window.editTamuUser = editTamuUser;
+
+// settle kuota otomatis: cek token yang sudah expired tapi belum "settled" utk akun ini
+async function settleKuotaJikaAda(userId){
+  const snap = await db.collection('qr_tokens')
+    .where('terikat_ke_userId','==',userId)
+    .where('settled','==', false).get();
+  const now = new Date();
+  for(const doc of snap.docs){
+    const d = doc.data();
+    if(d.expired_at.toDate() < now){
+      const tamuCount = (await db.collection('akun_user').doc(userId).collection('tamu').get()).size;
+      await db.collection('akun_user').doc(userId).update({
+        kuota_total: tamuCount + 500,
+        kuota_terpakai: tamuCount
+      });
+      await doc.ref.update({ settled: true, status: 'expired' });
+    }
+  }
+}
+
+// ================= ADM SEMENTARA =================
+async function renderAdmSementara(){
+  const userDoc = await db.collection('akun_user').doc(admSementaraSession.terikat_ke_userId).get();
+  const namaAkun = userDoc.data().username;
+
+  app.innerHTML = `
+    <div class="card">
+      <h2>Input Data Tamu — ${namaAkun}</h2>
+      <p class="muted">Petugas: <strong>${admSementaraSession.nama_petugas||'-'}</strong> • <span class="timer" id="sesiTimer"></span></p>
+    </div>
+
+    <div class="card">
+      <h2>Tambah Tamu</h2>
+      <div class="row">
+        <div><label>Nama</label><input type="text" id="asNama"></div>
+        <div><label>Alamat</label><input type="text" id="asAlamat"></div>
+      </div>
+      <div class="row">
+        <div><label>Nominal Sumbangan (Rp)</label><input type="number" id="asRp" min="0"></div>
+        <div><label>Status</label>
+          <select id="asStatus">
+            <option value="belum">Belum kembali</option>
+            <option value="sudah">Sudah kembali</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn-primary" id="asSubmit" style="margin-top:12px;">Simpan &amp; Lanjut Input</button>
+      <p class="muted" id="asCounter" style="margin-top:8px;"></p>
+    </div>
+
+    <div class="card">
+      <h2>Input Terakhir</h2>
+      <div id="asRecent"></div>
+    </div>
+  `;
+
+  let counter = 0;
+  document.getElementById('asSubmit').onclick = async () => {
+    const nama = document.getElementById('asNama').value.trim();
+    const alamat = document.getElementById('asAlamat').value.trim();
+    const rp = parseInt(document.getElementById('asRp').value)||0;
+    const status = document.getElementById('asStatus').value;
+    if(!nama) return showMsg(app.querySelector('.card'), 'Nama wajib diisi.');
+
+    const userId = admSementaraSession.terikat_ke_userId;
+    const tamuRef = await db.collection('akun_user').doc(userId).collection('tamu').add({
+      nama, alamat, rp, status,
+      permanen: false,
+      dicatat_oleh: 'adm_sementara',
+      dicatat_pada: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    // log audit (khusus ADM sementara), auto-hapus lewat TTL policy Firestore setelah 48 jam
+    await db.collection('log_adm_sementara').add({
+      token_id: admSementaraSession.tokenId,
+      nama_petugas: admSementaraSession.nama_petugas || '-',
+      terikat_ke_userId: userId,
+      tamu_id: tamuRef.id,
+      aksi: 'tambah',
+      nama_tamu: nama,
+      waktu: firebase.firestore.FieldValue.serverTimestamp(),
+      ttl_hapus_pada: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 48*60*60*1000))
+    });
+
+    counter++;
+    document.getElementById('asCounter').textContent = `${counter} data diinput sesi ini.`;
+    document.getElementById('asNama').value='';
+    document.getElementById('asAlamat').value='';
+    document.getElementById('asRp').value='';
+    document.getElementById('asStatus').value='belum';
+    document.getElementById('asNama').focus();
+    loadRecentInput(userId);
+  };
+
+  loadRecentInput(admSementaraSession.terikat_ke_userId);
+
+  // countdown timer
+  const expiredAt = admSementaraSession.expired_at.toDate();
+  const timerEl = document.getElementById('sesiTimer');
+  timerInterval = setInterval(() => {
+    const diff = expiredAt - new Date();
+    if(diff <= 0){
+      timerEl.textContent = 'Sesi telah berakhir.';
+      clearInterval(timerInterval);
+      setTimeout(()=>{ auth.signOut(); }, 1500);
+      return;
+    }
+    const h = Math.floor(diff/3600000);
+    const m = Math.floor((diff%3600000)/60000);
+    const s = Math.floor((diff%60000)/1000);
+    timerEl.textContent = `Sisa waktu sesi: ${h}j ${m}m ${s}d`;
+  }, 1000);
+}
+
+async function loadRecentInput(userId){
+  const el = document.getElementById('asRecent');
+  const snap = await db.collection('akun_user').doc(userId).collection('tamu')
+    .where('dicatat_oleh','==','adm_sementara')
+    .orderBy('dicatat_pada','desc').limit(8).get();
+  if(snap.empty){ el.innerHTML = '<p class="empty">Belum ada input.</p>'; return; }
+  let rows = '';
+  snap.forEach(doc => {
+    const t = doc.data();
+    rows += `<tr><td>${t.nama}</td><td>${t.alamat||'-'}</td><td>${fmtRp(t.rp)}</td></tr>`;
+  });
+  el.innerHTML = `<table><tbody>${rows}</tbody></table>`;
+}
+</script>
+</body>
+</html>
