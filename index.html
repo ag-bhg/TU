@@ -478,16 +478,18 @@ function renderLoginQr(){
       if(data.status !== 'aktif' || data.expired_at.toDate() < new Date()){
         return showMsg(card, 'Kode akses sudah kedaluwarsa (lebih dari 36 jam) atau sudah dinonaktifkan.');
       }
-      // klaim token dalam transaction (1 QR hanya utk 1 ADM sementara)
+      // Klaim/perbarui token. Catatan: pengecekan "1 QR hanya utk 1 device" yang
+      // dulu ada di sini (membandingkan assigned_uid) DIHAPUS — Firebase Auth
+      // anonim selalu membuat UID baru setiap kali login ulang, bahkan di
+      // device yang sama, jadi pengecekan itu membuat QR yang sama tidak bisa
+      // dipakai lagi setelah logout (gagal terus-menerus). Kode akses + batas
+      // waktu 36 jam sudah cukup sebagai kontrol akses untuk kebutuhan acara
+      // seperti ini; assigned_uid sekarang hanya dicatat sebagai info UID
+      // terakhir yang memegang kode ini.
       await db.runTransaction(async (tx) => {
         const fresh = await tx.get(tokenRef);
         const d = fresh.data();
-        if(d.assigned_uid && d.assigned_uid !== anonUser.uid){
-          throw new Error('Kode akses ini sudah dipakai oleh perangkat lain.');
-        }
-        if(!d.assigned_uid){
-          tx.update(tokenRef, {assigned_uid: anonUser.uid});
-        }
+        tx.update(tokenRef, {assigned_uid: anonUser.uid});
         // buat/perbarui mapping akses (dipakai oleh security rules)
         const aksesRef = db.collection('adm_sementara_akses').doc(anonUser.uid);
         tx.set(aksesRef, {
@@ -497,6 +499,9 @@ function renderLoginQr(){
         });
       });
       sessionStorage.setItem('adm_sementara_token', token);
+      // Bersihkan ?akses=... dari URL supaya kalau nanti user tekan "Keluar",
+      // halaman tidak otomatis mencoba klaim ulang kode yang sama tanpa diminta.
+      history.replaceState(null, '', window.location.pathname);
       // Langsung lanjut ke tampilan ADM Sementara tanpa reload penuh halaman —
       // location.reload() sebelumnya memaksa semua script (termasuk Firebase SDK)
       // diunduh & dijalankan ulang dari nol, inilah salah satu penyebab utama
