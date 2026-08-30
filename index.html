@@ -281,6 +281,20 @@ function showMsg(container, text, type='error'){
 // ================= ROUTING / INIT =================
 auth.onAuthStateChanged(async (user) => {
   clearInterval(timerInterval);
+
+  // Kalau URL bawa kode akses QR (?akses=...) tapi browser ini masih login
+  // sebagai sesi lain (Akun User, ADM Utama, atau token ADM Sementara yang
+  // beda) — paksa logout dulu. Firebase Auth menyimpan sesi login secara
+  // persisten, jadi tanpa ini, scan QR akan diam-diam mengabaikan kode akses
+  // dan malah menampilkan sesi lama (inilah penyebab layar "Akun User: test"
+  // kosong yang muncul waktu scan QR).
+  const urlParamsAwal = new URLSearchParams(window.location.search);
+  const aksesParamAwal = urlParamsAwal.get('akses');
+  if(aksesParamAwal && user && !(user.isAnonymous && sessionStorage.getItem('adm_sementara_token') === aksesParamAwal)){
+    await auth.signOut();
+    return; // signOut akan memicu onAuthStateChanged lagi dengan user=null
+  }
+
   if(!user){
     currentUser = null; currentRole = null; currentUserData = null;
     appHeader.style.display = 'none';
@@ -376,7 +390,9 @@ function renderLogin(){
     switchTab('qr');
     setTimeout(()=>{
       const inp = document.getElementById('qrTokenInput');
+      const btn = document.getElementById('qrSubmit');
       if(inp) inp.value = aksesParam;
+      if(btn) btn.click(); // langsung proses, sesuai janji "scan QR akan membuka halaman ini otomatis"
     }, 0);
   } else {
     renderLoginUser();
