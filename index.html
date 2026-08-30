@@ -4,10 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Buku Tamu Digital</title>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js" defer></script>
+<!-- qrcode.min.js sengaja TIDAK dimuat di sini — cuma dibutuhkan ADM Utama saat
+     membuat/menampilkan QR, jadi dimuat on-demand lewat muatLibraryQrCode() -->
 <style>
   :root{
     --ink:#1f2a3c;
@@ -180,6 +183,7 @@
 <main id="app"></main>
 
 <script>
+document.addEventListener('DOMContentLoaded', function(){
 /* =========================================================
    1. KONFIGURASI FIREBASE — GANTI DENGAN CONFIG PROYEK ANDA
    =========================================================
@@ -285,6 +289,32 @@ auth.onAuthStateChanged(async (user) => {
   }
   currentUser = user;
 
+  // User anonim (hasil scan QR) tidak mungkin punya dokumen di adm_utama atau
+  // akun_user, jadi langsung cek sesi token dulu — ini menghemat 2 pembacaan
+  // Firestore yang pasti kosong dan cuma memperlambat proses scan QR.
+  if(user.isAnonymous){
+    const savedToken = sessionStorage.getItem('adm_sementara_token');
+    if(savedToken){
+      const tokenDoc = await db.collection('qr_tokens').doc(savedToken).get();
+      if(tokenDoc.exists && tokenDoc.data().assigned_uid === user.uid){
+        const data = tokenDoc.data();
+        const expired = data.expired_at.toDate() < new Date();
+        if(!expired && data.status === 'aktif'){
+          currentRole = 'adm_sementara';
+          admSementaraSession = {tokenId: savedToken, ...data};
+          appHeader.style.display = 'flex';
+          whoAmI.textContent = 'ADM Sementara (sesi 36 jam)';
+          renderAdmSementara();
+          return;
+        }
+      }
+    }
+    // user anonim tanpa sesi valid -> tampilkan layar scan/masukkan kode
+    appHeader.style.display = 'none';
+    renderLogin();
+    return;
+  }
+
   // cek apakah dia ADM Utama
   const admDoc = await db.collection('adm_utama').doc(user.uid).get();
   if(admDoc.exists){
@@ -307,25 +337,7 @@ auth.onAuthStateChanged(async (user) => {
     return;
   }
 
-  // kalau user login anonim tapi punya sesi ADM sementara tersimpan
-  const savedToken = sessionStorage.getItem('adm_sementara_token');
-  if(user.isAnonymous && savedToken){
-    const tokenDoc = await db.collection('qr_tokens').doc(savedToken).get();
-    if(tokenDoc.exists && tokenDoc.data().assigned_uid === user.uid){
-      const data = tokenDoc.data();
-      const expired = data.expired_at.toDate() < new Date();
-      if(!expired && data.status === 'aktif'){
-        currentRole = 'adm_sementara';
-        admSementaraSession = {tokenId: savedToken, ...data};
-        appHeader.style.display = 'flex';
-        whoAmI.textContent = 'ADM Sementara (sesi 36 jam)';
-        renderAdmSementara();
-        return;
-      }
-    }
-  }
-
-  // user anonim tanpa sesi valid -> tampilkan layar scan/masukkan kode
+  // login berhasil tapi tidak cocok role manapun (kasus tidak wajar) -> ke layar login
   appHeader.style.display = 'none';
   renderLogin();
 });
@@ -469,8 +481,15 @@ function renderLoginQr(){
         });
       });
       sessionStorage.setItem('adm_sementara_token', token);
-      // trigger ulang render lewat onAuthStateChanged
-      location.reload();
+      // Langsung lanjut ke tampilan ADM Sementara tanpa reload penuh halaman —
+      // location.reload() sebelumnya memaksa semua script (termasuk Firebase SDK)
+      // diunduh & dijalankan ulang dari nol, inilah salah satu penyebab utama
+      // proses scan QR terasa berat.
+      currentRole = 'adm_sementara';
+      admSementaraSession = {tokenId: token, ...data, assigned_uid: anonUser.uid};
+      appHeader.style.display = 'flex';
+      whoAmI.textContent = 'ADM Sementara (sesi 36 jam)';
+      renderAdmSementara();
     }catch(e){
       showMsg(card, e.message || 'Gagal memproses kode akses.');
     }
@@ -678,7 +697,10 @@ async function bukaDetailUser(userId){
           <td>${t.alamat||'-'}</td>
           <td>${fmtRp(t.rp)}</td>
           <td><span class="badge ${t.status==='sudah'?'aktif':'belum'}">${t.status==='sudah'?'Sudah kembali':'Belum'}</span></td>
-          <td><button class="btn-outline btn-sm" onclick="editTamuAdm('${userId}','${doc.id}')">Edit</button></td>
+          <td style="white-space:nowrap;">
+            <button class="btn-outline btn-sm" onclick="editTamuAdm('${userId}','${doc.id}')">Edit</button>
+            <button class="btn-danger btn-sm" onclick="hapusTamuAdm('${userId}','${doc.id}')">Hapus</button>
+          </td>
         </tr>`;
     });
     tamuListEl.innerHTML = `
@@ -690,6 +712,24 @@ async function bukaDetailUser(userId){
 }
 
 window.bukaDetailUser = bukaDetailUser;
+
+// Lazy-load qrcode.min.js — hanya dibutuhkan ADM Utama saat membuat/menampilkan
+// QR. ADM Sementara (yang scan QR) tidak pernah memanggil ini sama sekali,
+// jadi mereka tidak perlu mengunduh library ini.
+let qrCodeLibPromise = null;
+function muatLibraryQrCode(){
+  if(window.QRCode) return Promise.resolve();
+  if(!qrCodeLibPromise){
+    qrCodeLibPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('Gagal memuat library QR Code.'));
+      document.head.appendChild(s);
+    });
+  }
+  return qrCodeLibPromise;
+}
 
 async function buatQrToken(userId){
   const namaPetugas = prompt('Nama petugas ADM Sementara (untuk catatan log):');
@@ -706,6 +746,8 @@ async function buatQrToken(userId){
     settled: false,
     dibuat_oleh: currentUser.uid
   });
+
+  await muatLibraryQrCode();
 
   const qrArea = document.getElementById('qrArea');
   qrArea.style.display = 'block';
@@ -725,6 +767,7 @@ async function buatQrToken(userId){
 
   loadTokenList(userId);
 }
+
 
 async function loadTokenList(userId){
   const el = document.getElementById('tokenList');
@@ -763,6 +806,7 @@ async function loadTokenList(userId){
 async function tampilkanUlangQr(tokenId){
   const doc = await db.collection('qr_tokens').doc(tokenId).get();
   const d = doc.data();
+  await muatLibraryQrCode();
   const qrArea = document.getElementById('qrArea');
   if(!qrArea) return;
   qrArea.style.display = 'block';
@@ -798,6 +842,24 @@ async function editTamuAdm(userId, tamuId){
   bukaDetailUser(userId);
 }
 window.editTamuAdm = editTamuAdm;
+
+async function hapusTamuAdm(userId, tamuId){
+  const ref = db.collection('akun_user').doc(userId).collection('tamu').doc(tamuId);
+  const doc = await ref.get();
+  if(!doc.exists) return;
+  const t = doc.data();
+  if(!confirm(`Hapus data tamu "${t.nama}"? Tindakan ini tidak bisa dibatalkan.`)) return;
+  await ref.delete();
+  // kalau data ini dulu ditambahkan lewat Akun User (permanen & mengurangi kuota),
+  // kembalikan kuota_terpakai supaya perhitungan kuota tetap akurat
+  if(t.dicatat_oleh === 'user'){
+    await db.collection('akun_user').doc(userId).update({
+      kuota_terpakai: firebase.firestore.FieldValue.increment(-1)
+    });
+  }
+  bukaDetailUser(userId);
+}
+window.hapusTamuAdm = hapusTamuAdm;
 
 // ================= AKUN USER =================
 async function renderAkunUser(){
@@ -1016,7 +1078,11 @@ async function renderAdmSementara(){
       waktu_lokal: Date.now()
     });
     simpanQueueKeLocal();
-    if(!daftarAlamat.includes(alamat) && alamat) daftarAlamat.push(alamat);
+    if(!daftarAlamat.includes(alamat) && alamat){
+      daftarAlamat.push(alamat);
+      renderDaftarAlamatOptions();
+      simpanAlamatKeCache();
+    }
 
     document.getElementById('asNama').value='';
     document.getElementById('asAlamat').value='';
@@ -1035,13 +1101,14 @@ async function renderAdmSementara(){
   };
 
   renderAsList();
-  muatSaranAlamat(admSementaraSession.terikat_ke_userId);
+  muatSaranAlamat();
+  muatSyncedRowsCache().then(renderAsList);
 
-  // auto-sync berkala tiap 2 menit, jaga-jaga walau belum sampai 15 data
+  // auto-sync berkala tiap 1 menit, jaga-jaga walau belum sampai 15 data
   if(syncTimer) clearInterval(syncTimer);
   syncTimer = setInterval(() => {
     if(inputQueue.length > 0) sinkronKeDatabase();
-  }, 2*60*1000);
+  }, 60*1000);
 
   // countdown timer sesi
   const expiredAt = admSementaraSession.expired_at.toDate();
@@ -1064,18 +1131,30 @@ async function renderAdmSementara(){
   }, 1000);
 }
 
-async function muatSaranAlamat(userId){
+// Catatan performa: sebelumnya fungsi ini menarik 300 dokumen dari Firestore
+// setiap kali ADM Sementara membuka halaman — inilah salah satu penyebab
+// aplikasi terasa berat. ADM Sementara cukup bertugas menulis data secepat
+// mungkin, jadi saran alamat cukup diambil dari cache ringan di perangkat ini
+// (localStorage), bukan query server setiap saat.
+function alamatCacheKey(){
+  return 'tamu_alamat_cache_' + admSementaraSession.terikat_ke_userId;
+}
+function muatSaranAlamat(){
   try{
-    const snap = await db.collection('akun_user').doc(userId).collection('tamu')
-      .orderBy('dicatat_pada','desc').limit(300).get();
-    const set = new Set(daftarAlamat);
-    snap.forEach(doc => { const a = doc.data().alamat; if(a) set.add(a); });
-    daftarAlamat = Array.from(set);
-    const listEl = document.getElementById('daftarAlamatList');
-    if(listEl){
-      listEl.innerHTML = daftarAlamat.map(a => `<option value="${a.replace(/"/g,'&quot;')}">`).join('');
-    }
-  }catch(e){ console.warn('Gagal memuat saran alamat:', e.message); }
+    const raw = localStorage.getItem(alamatCacheKey());
+    const cache = raw ? JSON.parse(raw) : [];
+    daftarAlamat = Array.from(new Set([...daftarAlamat, ...cache]));
+    renderDaftarAlamatOptions();
+  }catch(e){ /* abaikan, tidak kritis */ }
+}
+function renderDaftarAlamatOptions(){
+  const listEl = document.getElementById('daftarAlamatList');
+  if(listEl){
+    listEl.innerHTML = daftarAlamat.map(a => `<option value="${a.replace(/"/g,'&quot;')}">`).join('');
+  }
+}
+function simpanAlamatKeCache(){
+  try{ localStorage.setItem(alamatCacheKey(), JSON.stringify(daftarAlamat.slice(-100))); }catch(e){}
 }
 
 async function sinkronKeDatabase(manual){
@@ -1117,27 +1196,34 @@ async function sinkronKeDatabase(manual){
     if(statusEl) statusEl.textContent = `Tersinkron ${batchItems.length} data.`;
     const counterEl = document.getElementById('asCounter');
     if(counterEl) counterEl.textContent = `${inputQueue.length} menunggu sinkron.`;
-    renderAsList();
+    muatSyncedRowsCache().then(renderAsList);
   }catch(e){
     if(statusEl) statusEl.textContent = 'Gagal sinkron: ' + e.message;
     console.error('Sinkron gagal:', e);
   }
 }
 
-async function renderAsList(){
-  const el = document.getElementById('asRecent');
-  if(!el) return;
-  const userId = admSementaraSession.terikat_ke_userId;
-  let sinkronRows = [];
+// Cache ringan hasil terakhir yang sudah tersinkron ke server. Diisi sekali saat
+// halaman dibuka dan tiap kali sinkron berhasil — BUKAN setiap kali baris ini
+// dirender, supaya input data tetap terasa instan tanpa menunggu jaringan.
+let syncedRowsCache = [];
+
+async function muatSyncedRowsCache(){
   try{
+    const userId = admSementaraSession.terikat_ke_userId;
     const snap = await db.collection('akun_user').doc(userId).collection('tamu')
       .where('dicatat_oleh','==','adm_sementara')
-      .orderBy('dicatat_pada','desc').limit(50).get();
-    snap.forEach(doc => sinkronRows.push({id: doc.id, ...doc.data(), _synced:true}));
-  }catch(e){ /* index mungkin belum siap, abaikan */ }
+      .orderBy('dicatat_pada','desc').limit(20).get();
+    syncedRowsCache = [];
+    snap.forEach(doc => syncedRowsCache.push({id: doc.id, ...doc.data(), _synced:true}));
+  }catch(e){ /* index mungkin belum siap, abaikan — tidak menghalangi input */ }
+}
 
+function renderAsList(){
+  const el = document.getElementById('asRecent');
+  if(!el) return;
   const lokalRows = [...inputQueue].reverse().map(i => ({...i, _synced:false}));
-  const semua = [...lokalRows, ...sinkronRows];
+  const semua = [...lokalRows, ...syncedRowsCache];
 
   if(semua.length === 0){ el.innerHTML = '<p class="empty">Belum ada input.</p>'; return; }
 
@@ -1181,7 +1267,11 @@ async function editTamuAdmSementara(tipe, id){
     const alamat = prompt('Alamat:', t.alamat||''); if(alamat===null) return;
     const rp = prompt('Nominal sumbangan (angka saja):', t.rp||0); if(rp===null) return;
     const sudahKembali = confirm('Status sudah dikembalikan? OK = Sudah, Cancel = Belum');
-    await ref.update({ nama, alamat, rp: parseInt(rp)||0, status: sudahKembali?'sudah':'belum' });
+    const rpVal = parseInt(rp)||0;
+    const statusVal = sudahKembali?'sudah':'belum';
+    await ref.update({ nama, alamat, rp: rpVal, status: statusVal });
+    const cached = syncedRowsCache.find(r => r.id === id);
+    if(cached){ cached.nama = nama; cached.alamat = alamat; cached.rp = rpVal; cached.status = statusVal; }
     renderAsList();
   }
 }
@@ -1192,6 +1282,8 @@ window.addEventListener('beforeunload', () => {
     sinkronKeDatabase(true);
   }
 });
+
+}); // tutup document.addEventListener('DOMContentLoaded', ...)
 </script>
 </body>
 </html>
