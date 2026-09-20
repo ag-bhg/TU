@@ -270,12 +270,12 @@ function randomToken(len=8){
   for(let i=0;i<len;i++) s += chars[Math.floor(Math.random()*chars.length)];
   return s;
 }
-function showMsg(container, text, type='error'){
+function showMsg(container, text, type='error', durasi=5000){
   const el = document.createElement('div');
   el.className = 'msg ' + type;
   el.textContent = text;
   container.prepend(el);
-  setTimeout(()=>el.remove(), 5000);
+  setTimeout(()=>el.remove(), durasi);
 }
 
 // ================= ROUTING / INIT =================
@@ -290,9 +290,22 @@ auth.onAuthStateChanged(async (user) => {
   // kosong yang muncul waktu scan QR).
   const urlParamsAwal = new URLSearchParams(window.location.search);
   const aksesParamAwal = urlParamsAwal.get('akses');
-  if(aksesParamAwal && user && !(user.isAnonymous && sessionStorage.getItem('adm_sementara_token') === aksesParamAwal)){
+  // Hanya paksa logout bila sesi TIDAK anonim (Akun User/ADM Utama). Sesi anonim
+  // tidak boleh di-logout di sini walau kode belum tercatat di sessionStorage —
+  // dulu ini membunuh proses klaim QR di tengah jalan (listener auth fire sebelum
+  // handler sempat mencatat kode), sehingga layar memantul balik ke login,
+  // terlihat "stuck", dan bisa berputar terus-menerus.
+  if(aksesParamAwal && user && !user.isAnonymous){
     await auth.signOut();
     return; // signOut akan memicu onAuthStateChanged lagi dengan user=null
+  }
+  // Sesi anonim yang terikat token LAMA, tapi URL membawa kode QR BARU ->
+  // lepas sesi lama agar kode baru bisa diklaim. Aman dari loop karena kode
+  // sudah dicatat ke sessionStorage di awal proses klaim.
+  if(aksesParamAwal && user && user.isAnonymous && sessionStorage.getItem('adm_sementara_token') !== aksesParamAwal){
+    sessionStorage.removeItem('adm_sementara_token');
+    await auth.signOut();
+    return;
   }
 
   if(!user){
@@ -388,12 +401,17 @@ function renderLogin(){
 
   if(aksesParam){
     switchTab('qr');
-    setTimeout(()=>{
-      const inp = document.getElementById('qrTokenInput');
-      const btn = document.getElementById('qrSubmit');
-      if(inp) inp.value = aksesParam;
-      if(btn) btn.click(); // langsung proses, sesuai janji "scan QR akan membuka halaman ini otomatis"
-    }, 0);
+    if(!auth.currentUser){
+      // Hanya proses otomatis saat belum ada sesi. Bila masih ada sesi aktif
+      // (Akun User/ADM Utama), handler di atas signOut dulu, lalu fungsi ini
+      // berjalan lagi dengan sesi kosong dan kodes diproses.
+      setTimeout(()=>{
+        const inp = document.getElementById('qrTokenInput');
+        const btn = document.getElementById('qrSubmit');
+        if(inp) inp.value = aksesParam;
+        if(btn) btn.click(); // langsung proses, sesuai janji "scan QR akan membuka halaman ini otomatis"
+      }, 0);
+    }
   } else {
     renderLoginUser();
   }
@@ -462,21 +480,41 @@ function renderLoginQr(){
     <button class="btn-primary" style="margin-top:14px;width:100%;" id="qrSubmit">Masuk dengan Kode</button>
   `;
   document.getElementById('qrSubmit').onclick = async () => {
+    const btn = document.getElementById('qrSubmit');
+    if(btn.disabled) return; // proses sedang berjalan — cegah ketukan ganda
     const token = document.getElementById('qrTokenInput').value.trim().toUpperCase();
     if(!token) return showMsg(card, 'Masukkan kode akses.');
-    try{
+    const labelAsli = btn.textContent;
+    const resetTombol = () => { btn.disabled = false; btn.textContent = labelAsli; };
+    btn.disabled = true;
+    btn.textContent = 'Memproses kode...';
+    const jalankan = async () => {
       // sign in anonim DULU — security rules mewajibkan sudah login sebelum baca qr_tokens
       let anonUser = auth.currentUser;
       if(!anonUser || !anonUser.isAnonymous){
-        const cred = await auth.signInAnonymously();
-        anonUser = cred.user;
+        try{
+          const cred = await auth.signInAnonymously();
+          anonUser = cred.user;
+        }catch(e){
+          if(e && (e.code === 'auth/operation-not-allowed' || e.code === 'auth/admin-restricted-operation')){
+            throw new Error('Login anonim belum diaktifkan. Di Firebase Console > Authentication > Sign-in method, aktifkan penyedia "Anonymous", lalu coba lagi.');
+          }
+          if(e && e.code === 'auth/network-request-failed'){
+            throw new Error('Koneksi ke server login terblokir (biasanya Brave Shields). Matikan Shields untuk situs ini atau pakai Chrome, lalu coba lagi.');
+          }
+          throw e;
+        }
       }
+      // Catat kode ke sessionStorage SEGERA setelah login anonim berhasil — sebelum
+      // pembacaan token — supaya pemeriksaan sesi di listener auth tidak membunuh
+      // proses klaim ini di tengah jalan.
+      sessionStorage.setItem('adm_sementara_token', token);
       const tokenRef = db.collection('qr_tokens').doc(token);
       const tokenSnap = await tokenRef.get();
-      if(!tokenSnap.exists) return showMsg(card, 'Kode akses tidak ditemukan.');
+      if(!tokenSnap.exists) throw new Error('Kode akses tidak ditemukan. Pastikan kode benar (8 karakter).');
       const data = tokenSnap.data();
       if(data.status !== 'aktif' || data.expired_at.toDate() < new Date()){
-        return showMsg(card, 'Kode akses sudah kedaluwarsa (lebih dari 36 jam) atau sudah dinonaktifkan.');
+        throw new Error('Kode akses sudah kedaluwarsa (lebih dari 36 jam) atau sudah dinonaktifkan. Minta ADM Utama membuat QR baru.');
       }
       // Klaim/perbarui token. Catatan: pengecekan "1 QR hanya utk 1 device" yang
       // dulu ada di sini (membandingkan assigned_uid) DIHAPUS — Firebase Auth
@@ -498,7 +536,6 @@ function renderLoginQr(){
           expired_at: d.expired_at
         });
       });
-      sessionStorage.setItem('adm_sementara_token', token);
       // Bersihkan ?akses=... dari URL supaya kalau nanti user tekan "Keluar",
       // halaman tidak otomatis mencoba klaim ulang kode yang sama tanpa diminta.
       history.replaceState(null, '', window.location.pathname);
@@ -511,8 +548,25 @@ function renderLoginQr(){
       appHeader.style.display = 'flex';
       whoAmI.textContent = 'ADM Sementara (sesi 36 jam)';
       renderAdmSementara();
+    };
+    try{
+      await Promise.race([
+        jalankan(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('Proses memakan waktu terlalu lama (>25 detik). Biasanya koneksi ke Firebase terblokir (Brave Shields/jaringan). Matikan Shields untuk situs ini, atau pakai Chrome, lalu coba lagi.')), 25000))
+      ]);
     }catch(e){
-      showMsg(card, e.message || 'Gagal memproses kode akses.');
+      sessionStorage.removeItem('adm_sementara_token');
+      // Listener auth bisa saja me-render ulang kartu login di tengah proses;
+      // pakai elemen yang HIDUP sekarang supaya pesan error benar-benar terlihat.
+      const liveCard = document.getElementById('loginCard') || card;
+      const liveBtn = document.getElementById('qrSubmit');
+      if(liveBtn){ liveBtn.disabled = false; liveBtn.textContent = 'Masuk dengan Kode'; }
+      let pesan = e.message || 'Gagal memproses kode akses.';
+      if(e && (e.code === 'permission-denied' || /insufficient permissions/i.test(pesan))){
+        pesan = 'Akses ditolak security rules Firestore. Pastikan rules mengizinkan user anonim membaca qr_tokens dan menulis adm_sementara_akses. Detail: ' + pesan;
+      }
+      showMsg(liveCard, pesan, 'error', 20000);
+      console.error('Klaim QR gagal:', e);
     }
   };
 }
