@@ -34,9 +34,7 @@ let currentUserData = null;
 let admSession = null;
 let timerInterval = null;
 let onSnapshotUnsub = null;
-let tokenWatchUnsub = null;   // pengawas realtime token QR (auto-logout sesi lama)
-let gagalKodeCount = 0;       // hitungan kode salah di login utama — 20x tanpa blokir
-let cooldownSampai = 0;       // jeda lokal singkat setelah batas percobaan (ms epoch)
+let cooldownSampai = 0;       // jeda lokal hanya untuk blokir too-many-requests (ms epoch)
 
 const app = document.getElementById('app');
 const appHeader = document.getElementById('appHeader');
@@ -211,9 +209,18 @@ auth.onAuthStateChanged(async (user) => {
   // Kode akses QR di URL (?akses=KODE) BUKAN urusan halaman utama —
   // pemrosesannya kini milik halaman petugas /Adms (auto-proses maksimal 1x,
   // gagal = berhenti, tanpa loop retry seperti insiden sebelumnya).
-  const aksesUrl = new URLSearchParams(window.location.search).get('akses');
-  if(aksesUrl && !user){
-    renderLogin(null, aksesUrl);
+  const params = new URLSearchParams(window.location.search);
+  const aksesUrl = params.get('akses');
+  const uidUrl = params.get('u');
+  // QR SATU LANGKAH: kode + uid pemilik di URL -> langsung masuk tanpa verifikasi.
+  // Berlaku di kondisi apa pun, tanpa klaim DB, tanpa pengecekan kedaluwarsa.
+  if(aksesUrl && uidUrl){
+    const nama = params.get('n') || '';
+    masukSemenTaraLangsung(aksesUrl, uidUrl, nama);
+    return;
+  }
+  if(aksesUrl && !uidUrl && !user){
+    renderLogin(null, aksesUrl); // QR lama tanpa uid: arahkan ke /Adms (jalur aman)
     return;
   }
   const akses = '';
@@ -227,22 +234,17 @@ auth.onAuthStateChanged(async (user) => {
   currentUser = user;
 
   if(user.isAnonymous){
+    // Sesi petugas dipulihkan murni dari penyimpanan lokal — tanpa cek DB.
+    // Reload/putus-nyambung pun langsung kembali ke lembar input.
     const savedToken = sessionStorage.getItem('adm_sementara_token');
-    if(savedToken){
-      try{
-        const tokenDoc = await db.collection('qr_tokens').doc(savedToken).get();
-        if(tokenDoc.exists && tokenDoc.data().assigned_uid === user.uid){
-          const data = tokenDoc.data();
-          if(data.status === 'aktif' && data.expired_at.toDate() > new Date()){
-            currentRole = 'adm_sementara';
-            admSession = {tokenId: savedToken, ...data};
-            appHeader.style.display = 'flex';
-            whoAmI.textContent = 'Petugas: ' + (data.nama_petugas||'-');
-            renderInputSheet();
-            return;
-          }
-        }
-      }catch(e){ console.warn('Cek sesi QR gagal:', e.message); }
+    const savedUid = sessionStorage.getItem('adm_sementara_uid');
+    if(savedToken && savedUid){
+      currentRole = 'adm_sementara';
+      admSession = {tokenId: savedToken, terikat_ke_userId: savedUid, nama_petugas: sessionStorage.getItem('adm_sementara_nama')||''};
+      appHeader.style.display = 'flex';
+      whoAmI.textContent = 'Petugas: ' + (admSession.nama_petugas||'-');
+      renderInputSheet();
+      return;
     }
     appHeader.style.display = 'none';
     renderLogin(akses);
@@ -326,8 +328,7 @@ function renderLogin(kodeQr, aksesUrl){
         const isEmail = v.includes('@');
         // (1) Kode QR: huruf-angka polos tanpa password -> akses petugas
         if(!isEmail && !p && /^[A-Z0-9]+$/.test(v)){
-          await masukDenganKode(v);
-          gagalKodeCount = 0; // sukses: reset hitungan gagal
+          await masukKodeCepat(v);
           return;
         }
         // (2) Username polos -> domain internal
@@ -346,10 +347,6 @@ function renderLogin(kodeQr, aksesUrl){
         showMsg(msgArea, pesanErrorAuth(e), 'error', 15000);
         if(String(e && e.code) === 'auth/too-many-requests'){
           cooldownSampai = Date.now() + 5*60*1000;
-        }else if(!p){
-          gagalKodeCount++;
-          if(gagalKodeCount >= 20) cooldownSampai = Date.now() + 60*1000;
-          else if(gagalKodeCount >= 3) showMsg(msgArea, 'Percobaan ke-' + gagalKodeCount + ' — tetap boleh dicoba sampai 20x, tidak diblokir.', 'ok', 4000);
         }
         btn.disabled = false; btn.textContent = 'Masuk';
       }
@@ -365,50 +362,38 @@ function renderLogin(kodeQr, aksesUrl){
   // kegagalan berputar tanpa henti sampai Firebase memblokir perangkat.
 }
 
-async function masukDenganKode(token){
-  mulaiBusy('Memverifikasi kode akses…');
-  try{
-    let anonUser = auth.currentUser;
-    if(!anonUser || !anonUser.isAnonymous){
-      const cred = await auth.signInAnonymously();
-      anonUser = cred.user;
+// ===== LOGIN PETUGAS SATU LANGKAH (tanpa verifikasi DB) =====
+// QR membawa sendiri identitas akun: ?akses=KODE&u=UID. Scan -> login anonim
+// (satu panggilan, wajib agar rules Firestore mengizinkan tulis) -> langsung
+// masuk tulis data. Tanpa klaim token, tanpa cek assigned_uid, tanpa cek
+// kedaluwarsa, tanpa pengawas yang mengusir sesi — di kondisi apa pun langsung masuk.
+// UID di URL BUKAN rahasia (hanya penunjuk akun pemilik lembar); yang menjaga
+// tulisan tetap tertib adalah security rules Firestore, bukan proses klaim.
+function masukSemenTaraLangsung(token, uidPemilik, namaPetugas){
+  mulaiBusy('Masuk petugas…');
+  (async () => {
+    try{
+      let anon = auth.currentUser;
+      if(!anon || !anon.isAnonymous){
+        const cred = await auth.signInAnonymously();
+        anon = cred.user;
+      }
+      sessionStorage.setItem('adm_sementara_token', token);
+      sessionStorage.setItem('adm_sementara_uid', uidPemilik);
+      if(namaPetugas) sessionStorage.setItem('adm_sementara_nama', namaPetugas);
+      currentRole = 'adm_sementara';
+      admSession = {tokenId: token, terikat_ke_userId: uidPemilik, nama_petugas: namaPetugas||''};
+      history.replaceState(null, '', window.location.pathname);
+      appHeader.style.display = 'flex';
+      whoAmI.textContent = 'Petugas: ' + (namaPetugas||'-');
+      renderInputSheet();
+    }catch(e){
+      selesaiBusy();
+      app.innerHTML = '<div class="card"><p class="empty">' + esc(pesanErrorAuth(e)) + '</p><p class="muted"><a href="Adms/">Buka halaman akses petugas &rarr;</a></p></div>';
+      return;
     }
-    // Catat kode SEGERA sebelum pembacaan — mencegah race dengan listener auth
-    sessionStorage.setItem('adm_sementara_token', token);
-    const tokenRef = db.collection('qr_tokens').doc(token);
-    const snap = await tokenRef.get();
-    if(!snap.exists){
-      sessionStorage.removeItem('adm_sementara_token');
-      throw new Error('Kode akses tidak ditemukan. Periksa penulisan kode (8 karakter).');
-    }
-    const data = snap.data();
-    if(data.status !== 'aktif' || data.expired_at.toDate() < new Date()){
-      sessionStorage.removeItem('adm_sementara_token');
-      throw new Error('Kode akses kedaluwarsa atau dinonaktifkan. Minta ADM Utama membuat QR baru.');
-    }
-    mulaiBusy('Membuka lembar input…');
-    await db.runTransaction(async (tx) => {
-      const fresh = await tx.get(tokenRef);
-      const d = fresh.data();
-      // Setiap scan selalu MENGAMBIL ALIH token: assigned_uid ditimpa uid anonim
-      // perangkat ini. Sesi petugas sebelumnya otomatis ter-logout oleh
-      // pasangPengawasToken() di perangkat lamanya.
-      tx.update(tokenRef, {assigned_uid: anonUser.uid});
-      tx.set(db.collection('adm_sementara_akses').doc(anonUser.uid), {
-        terikat_ke_userId: d.terikat_ke_userId,
-        token_id: token,
-        expired_at: d.expired_at
-      });
-    });
-    history.replaceState(null, '', window.location.pathname);
-    currentRole = 'adm_sementara';
-    admSession = {tokenId: token, ...data, assigned_uid: anonUser.uid};
-    appHeader.style.display = 'flex';
-    whoAmI.textContent = 'Petugas: ' + (data.nama_petugas||'-');
-    renderInputSheet();
-  }finally{
     selesaiBusy();
-  }
+  })();
 }
 
 // ================= LEMBAR INPUT + TABEL =================
@@ -461,7 +446,9 @@ function renderInputSheet(){
   if(btnEkspor) btnEkspor.onclick = () => eksporCsv('daftar-tamu');
   pasangFormCepat();
   pasangLanggananTabel(targetUserUid());
-  pasangPengawasToken();
+  // TANPA pengawas token: sesi petugas tidak diusir oleh siapa pun —
+  // alur satu langkah tidak mengisi assigned_uid, jadi pengawas justru
+  // akan salah menganggap sesi dicuri. Sesi berakhir hanya via Keluar.
   pasangTimerSesi();
 }
 
@@ -657,35 +644,35 @@ function eksporCsv(namaBerkas){
   URL.revokeObjectURL(a.href);
 }
 
-// ===== PENGAWAS SESI QR: sesi petugas lama otomatis berakhir bila token
-// diambil alih petugas baru, dihapus, dinonaktifkan, atau diperpanjang ADM Utama =====
-function hentikanPengawasToken(){
-  if(tokenWatchUnsub){ tokenWatchUnsub(); tokenWatchUnsub = null; }
+// ===== LOGIN PETUGAS VIA KODE MANUAL: baca pemilik lembar SEKALI, langsung masuk.
+// Tanpa klaim token, tanpa cek status/kedaluwarsa — satu panggilan baca lalu masuk.
+async function masukKodeCepat(token){
+  mulaiBusy('Masuk petugas…');
+  try{
+    let anon = auth.currentUser;
+    if(!anon || !anon.isAnonymous){
+      const cred = await auth.signInAnonymously();
+      anon = cred.user;
+    }
+    const snap = await db.collection('qr_tokens').doc(token).get();
+    if(!snap.exists) throw new Error('Kode akses tidak ditemukan. Periksa penulisan kode (8 karakter).');
+    const d = snap.data();
+    sessionStorage.setItem('adm_sementara_token', token);
+    sessionStorage.setItem('adm_sementara_uid', d.terikat_ke_userId);
+    sessionStorage.setItem('adm_sementara_nama', d.nama_petugas || '');
+    currentRole = 'adm_sementara';
+    admSession = {tokenId: token, terikat_ke_userId: d.terikat_ke_userId, nama_petugas: d.nama_petugas||''};
+    history.replaceState(null, '', window.location.pathname);
+    appHeader.style.display = 'flex';
+    whoAmI.textContent = 'Petugas: ' + (d.nama_petugas||'-');
+    renderInputSheet();
+  }finally{
+    selesaiBusy();
+  }
 }
-function pasangPengawasToken(){
-  hentikanPengawasToken();
-  if(currentRole !== 'adm_sementara' || !admSession) return;
-  tokenWatchUnsub = db.collection('qr_tokens').doc(admSession.tokenId)
-    .onSnapshot(snap => {
-      if(!snap.exists){
-        hentikanPengawasToken();
-        alert('QR akses ini telah dihapus oleh ADM Utama. Sesi diakhiri.');
-        auth.signOut();
-        return;
-      }
-      const d = snap.data();
-      if(!d.assigned_uid || d.assigned_uid !== currentUser.uid){
-        hentikanPengawasToken();
-        alert('QR ini baru dipindai petugas lain / diperbarui ADM Utama. Sesi lama otomatis berakhir.');
-        auth.signOut();
-        return;
-      }
-      if(d.status !== 'aktif' || d.expired_at.toDate() < new Date()){
-        hentikanPengawasToken();
-        alert('Masa berlaku QR akses telah berakhir. Sesi diakhiri.');
-        auth.signOut();
-      }
-    }, (err) => { console.warn('Pengawas token:', err.message); });
+
+function hentikanPengawasToken(){
+  // Sisa kompatibilitas — pengawas sudah tidak dipakai pada alur satu langkah.
 }
 
 function pasangTimerSesi(){
@@ -927,7 +914,7 @@ async function buatQrToken(userId, username){
     await muatLibraryQrCode();
     const qrArea = document.getElementById('qrArea');
     qrArea.style.display = 'block';
-    const linkUrl = window.location.origin + window.location.pathname + '?akses=' + tokenId;
+    const linkUrl = window.location.origin + window.location.pathname + '?akses=' + tokenId + '&u=' + userId + '&n=' + encodeURIComponent(namaPetugas.trim());
     qrArea.innerHTML = `
       <h2>QR Petugas — ${esc(namaPetugas)}</h2>
       <div class="qr-box">
@@ -971,6 +958,7 @@ async function muatTokenList(userId){
   el.innerHTML = '<div class="sheet-wrap"><table class="sheet" style="min-width:420px;"><thead><tr><th>Petugas</th><th>Berlaku s/d</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
 
   // Ketuk baris QR -> menu: Tampilkan ulang / Perpanjang & aktifkan / Hapus
+  // (semua QR memakai tautan SATU LANGKAH: ?akses=..&u=..&n=..)
   el.querySelectorAll('tr.baris-qr').forEach(tr => {
     tr.addEventListener('click', function(e){
       e.stopPropagation();
@@ -988,9 +976,8 @@ function menuQrToken(tokenId, namaPetugas){
       mulaiBusy('Memperpanjang QR…');
       ref.update({
         status: 'aktif',
-        expired_at: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 36*60*60*1000)),
-        assigned_uid: null
-      }).then(() => showMsg(app, 'QR "' + (namaPetugas||'(tanpa nama)') + '" diperpanjang & aktif. Sesi petugas lama otomatis berakhir.', 'ok'))
+        expired_at: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 36*60*60*1000))
+      }).then(() => showMsg(app, 'QR "' + (namaPetugas||'(tanpa nama)') + '" diperpanjang & aktif.', 'ok'))
         .catch(e => showMsg(app, 'Gagal: ' + (e.message||e)))
         .finally(selesaiBusy);
     }},
@@ -1013,7 +1000,7 @@ async function tampilkanQrUlang(tokenId, namaPetugas){
     const qrArea = document.getElementById('qrArea');
     if(!qrArea) return;
     qrArea.style.display = 'block';
-    const linkUrl = window.location.origin + window.location.pathname + '?akses=' + tokenId;
+    const linkUrl = window.location.origin + window.location.pathname + '?akses=' + tokenId + '&u=' + userId + '&n=' + encodeURIComponent(namaPetugas||'');
     qrArea.innerHTML = `
       <h2>QR Petugas — ${esc(namaPetugas||'(tanpa nama)')}</h2>
       <div class="qr-box">
