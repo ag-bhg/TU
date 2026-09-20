@@ -63,9 +63,10 @@ button{cursor:pointer;border:none;border-radius:6px;padding:10px 14px;font-size:
 .config-warning{background:#f6e4e4;color:#7a2e2e;padding:12px 14px;font-size:13px;border-bottom:3px solid var(--maroon);}
 .quick-line{display:flex;gap:8px;}
 .quick-line input{min-width:0;}
-#qNama{flex:2.2;}
+#qNama{flex:2.6;}
 #qAlamat{flex:1.6;}
-#qRp{flex:1.2;text-align:right;}
+/* Rp cukup untuk "Rp 5.000.000" di layar kecil; nama lebih lebar utk nama panjang */
+#qRp{flex:1;text-align:right;min-width:118px;}
 #qStatus{flex:.9;}
 #qTambah{flex:none;padding:11px 16px;}
 .sync-pill{
@@ -153,9 +154,9 @@ body.busy .busy-overlay{pointer-events:auto;}
 @media(max-width:600px){
   .tcol-aksi-hidden{display:none;}
   .quick-line{flex-wrap:wrap;}
-  #qNama{flex:100%;}
+  #qNama{flex:100%;font-size:17px;}
   #qAlamat{flex:1;}
-  #qRp{flex:1;}
+  #qRp{flex:1;min-width:118px;}
   #qStatus{flex:1;}
   #qTambah{flex:100%;}
 }

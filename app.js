@@ -34,6 +34,9 @@ let currentUserData = null;
 let admSession = null;
 let timerInterval = null;
 let onSnapshotUnsub = null;
+let tokenWatchUnsub = null;   // pengawas realtime token QR (auto-logout sesi lama)
+let gagalKodeCount = 0;       // hitungan kode salah — toleran sampai 20x tanpa blokir
+let cooldownSampai = 0;       // jeda lokal singkat setelah batas percobaan (ms epoch)
 
 const app = document.getElementById('app');
 const appHeader = document.getElementById('appHeader');
@@ -42,6 +45,7 @@ const whoAmI = document.getElementById('whoAmI');
 document.getElementById('btnLogout').onclick = async () => {
   clearInterval(timerInterval);
   if(onSnapshotUnsub){ onSnapshotUnsub(); onSnapshotUnsub = null; }
+  hentikanPengawasToken();
   sessionStorage.removeItem('adm_sementara_token');
   admSession = null;
   await auth.signOut();
@@ -202,6 +206,7 @@ function pesanErrorAuth(e){
 auth.onAuthStateChanged(async (user) => {
   clearInterval(timerInterval);
   if(onSnapshotUnsub){ onSnapshotUnsub(); onSnapshotUnsub = null; }
+  hentikanPengawasToken();
 
   const akses = new URLSearchParams(window.location.search).get('akses') || '';
 
@@ -302,6 +307,12 @@ function renderLogin(kodeQr){
     const v = inp.value.trim();
     const p = pass.value;
     if(!v) return showMsg(msgArea, 'Isi kode akses / username / email.');
+    // Jeda lokal hanya untuk percobaan kode QR (tanpa password): sampai 20x gagal
+    // tidak diblokir sama sekali; setelahnya hanya jeda singkat, bukan blokir.
+    if(!p && Date.now() < cooldownSampai){
+      const s = Math.ceil((cooldownSampai - Date.now())/1000);
+      return showMsg(msgArea, 'Jeda sebentar — coba lagi dalam ' + s + ' detik.');
+    }
     btn.disabled = true; btn.textContent = 'Memproses...';
     mulaiBusy('Memeriksa akun…');
 
@@ -311,6 +322,7 @@ function renderLogin(kodeQr){
         // (1) Kode QR: huruf-angka polos tanpa password -> akses petugas
         if(!isEmail && !p && /^[A-Z0-9]+$/.test(v)){
           await masukDenganKode(v);
+          gagalKodeCount = 0; // sukses: reset hitungan gagal
           return;
         }
         // (2) Username polos -> domain internal
@@ -327,6 +339,13 @@ function renderLogin(kodeQr){
       }catch(e){
         selesaiBusy();
         showMsg(msgArea, pesanErrorAuth(e), 'error', 15000);
+        if(String(e && e.code) === 'auth/too-many-requests'){
+          cooldownSampai = Date.now() + 5*60*1000;
+        }else if(!p){
+          gagalKodeCount++;
+          if(gagalKodeCount >= 20) cooldownSampai = Date.now() + 60*1000;
+          else if(gagalKodeCount >= 3) showMsg(msgArea, 'Percobaan ke-' + gagalKodeCount + ' — tetap boleh dicoba sampai 20x, tidak diblokir.', 'ok', 4000);
+        }
         btn.disabled = false; btn.textContent = 'Masuk';
       }
     })();
@@ -367,6 +386,9 @@ async function masukDenganKode(token){
     await db.runTransaction(async (tx) => {
       const fresh = await tx.get(tokenRef);
       const d = fresh.data();
+      // Setiap scan selalu MENGAMBIL ALIH token: assigned_uid ditimpa uid anonim
+      // perangkat ini. Sesi petugas sebelumnya otomatis ter-logout oleh
+      // pasangPengawasToken() di perangkat lamanya.
       tx.update(tokenRef, {assigned_uid: anonUser.uid});
       tx.set(db.collection('adm_sementara_akses').doc(anonUser.uid), {
         terikat_ke_userId: d.terikat_ke_userId,
@@ -401,7 +423,7 @@ function renderInputSheet(){
       <div class="quick-line">
         <input type="text" id="qNama" placeholder="Nama tamu" autocomplete="off">
         <input type="text" id="qAlamat" placeholder="Alamat (opsional)" autocomplete="off" list="addrList">
-        <input type="text" id="qRp" inputmode="numeric" placeholder="Rp0" style="text-align:right;">
+        <input type="text" id="qRp" inputmode="numeric" placeholder="Rp" style="text-align:right;">
         ${pilihStatus ? `
         <select id="qStatus">
           <option value="belum">Belum</option>
@@ -415,7 +437,7 @@ function renderInputSheet(){
       <h2>Daftar Tamu <span class="muted" id="jmlTamu"></span><button class="btn-outline btn-sm" id="btnEkspor" type="button">⬇ Export ke Excel</button></h2>
       <div class="sheet-wrap">
         <table class="sheet">
-          <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Sumbangan</th><th class="tcol-status">Status</th><th class="tcol-aksi-hidden"></th></tr></thead>
+          <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Rp</th><th class="tcol-status">Status</th><th class="tcol-aksi-hidden"></th></tr></thead>
           <tbody id="sheetBody"></tbody>
           <tfoot>
             <tr class="sheet-total">
@@ -435,6 +457,7 @@ function renderInputSheet(){
   if(btnEkspor) btnEkspor.onclick = () => eksporCsv('daftar-tamu');
   pasangFormCepat();
   pasangLanggananTabel(targetUserUid());
+  pasangPengawasToken();
   pasangTimerSesi();
 }
 
@@ -601,7 +624,7 @@ function bukaDialogEditBaris(tr, ref){
     fields: [
       {key: 'nama', label: 'Nama', nilai: tr.dataset.nama},
       {key: 'alamat', label: 'Alamat', nilai: tr.dataset.alamat},
-      {key: 'rp', label: 'Sumbangan (Rp)', nilai: tr.dataset.rp && Number(tr.dataset.rp) ? Number(tr.dataset.rp).toLocaleString('id-ID') : '', numerik: true}
+      {key: 'rp', label: 'Rp', nilai: tr.dataset.rp && Number(tr.dataset.rp) ? Number(tr.dataset.rp).toLocaleString('id-ID') : '', numerik: true}
     ],
     onSimpan: async (nilai) => {
       await ref.update(nilai);
@@ -613,7 +636,7 @@ function bukaDialogEditBaris(tr, ref){
 function eksporCsv(namaBerkas){
   if(!dataTamuTerkini.length){ alert('Belum ada data tamu untuk diekspor.'); return; }
   const kutip = (v) => '"' + String(v==null ? '' : v).replace(/"/g,'""') + '"';
-  const baris = [['No','Nama','Alamat','Sumbangan (Rp)','Status'].map(kutip).join(';')];
+  const baris = [['No','Nama','Alamat','Rp','Status'].map(kutip).join(';')];
   dataTamuTerkini.forEach((t, i) => {
     baris.push([i+1, t.nama, t.alamat, t.rp, t.status==='sudah' ? 'Sudah' : 'Belum'].map(kutip).join(';'));
   });
@@ -628,6 +651,37 @@ function eksporCsv(namaBerkas){
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(a.href);
+}
+
+// ===== PENGAWAS SESI QR: sesi petugas lama otomatis berakhir bila token
+// diambil alih petugas baru, dihapus, dinonaktifkan, atau diperpanjang ADM Utama =====
+function hentikanPengawasToken(){
+  if(tokenWatchUnsub){ tokenWatchUnsub(); tokenWatchUnsub = null; }
+}
+function pasangPengawasToken(){
+  hentikanPengawasToken();
+  if(currentRole !== 'adm_sementara' || !admSession) return;
+  tokenWatchUnsub = db.collection('qr_tokens').doc(admSession.tokenId)
+    .onSnapshot(snap => {
+      if(!snap.exists){
+        hentikanPengawasToken();
+        alert('QR akses ini telah dihapus oleh ADM Utama. Sesi diakhiri.');
+        auth.signOut();
+        return;
+      }
+      const d = snap.data();
+      if(!d.assigned_uid || d.assigned_uid !== currentUser.uid){
+        hentikanPengawasToken();
+        alert('QR ini baru dipindai petugas lain / diperbarui ADM Utama. Sesi lama otomatis berakhir.');
+        auth.signOut();
+        return;
+      }
+      if(d.status !== 'aktif' || d.expired_at.toDate() < new Date()){
+        hentikanPengawasToken();
+        alert('Masa berlaku QR akses telah berakhir. Sesi diakhiri.');
+        auth.signOut();
+      }
+    }, (err) => { console.warn('Pengawas token:', err.message); });
 }
 
 function pasangTimerSesi(){
@@ -805,7 +859,7 @@ async function bukaLembarAkun(userId){
       <h2>Lembar Tamu <button class="btn-outline btn-sm" id="btnEkspor" type="button">⬇ Export ke Excel</button></h2>
       <div class="sheet-wrap">
         <table class="sheet">
-          <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Sumbangan</th><th class="tcol-status">Status</th><th class="tcol-aksi-hidden"></th></tr></thead>
+          <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Rp</th><th class="tcol-status">Status</th><th class="tcol-aksi-hidden"></th></tr></thead>
           <tbody id="sheetBody"><tr><td colspan="6"><p class="empty">Memuat…</p></td></tr></tbody>
           <tfoot><tr class="sheet-total"><td colspan="3">TOTAL</td><td style="text-align:right;" id="totalRp">Rp 0</td><td id="totalInfo" class="muted" style="font-weight:400;"></td><td class="tcol-aksi-hidden"></td></tr></tfoot>
         </table>
@@ -905,9 +959,71 @@ async function muatTokenList(userId){
   snap.forEach(doc => {
     const d = doc.data();
     const expired = d.expired_at.toDate() < new Date();
-    rows += '<tr><td><strong>' + esc(d.nama_petugas||'(tanpa nama)') + '</strong><br><span class="token-code" style="font-size:11px;">' + doc.id + '</span></td><td>' + fmtWaktu(d.expired_at) + '</td><td><span class="badge ' + (expired?'expired':'aktif') + '">' + (expired?'Kedaluwarsa':'Berlaku') + '</span></td></tr>';
+    const badge = d.status === 'nonaktif'
+      ? '<span class="badge expired">Nonaktif</span>'
+      : (expired ? '<span class="badge expired">Kedaluwarsa</span>' : '<span class="badge aktif">Berlaku</span>');
+    rows += '<tr class="baris-qr" data-id="' + doc.id + '" data-nama="' + esc(d.nama_petugas||'') + '"><td><strong>' + esc(d.nama_petugas||'(tanpa nama)') + '</strong><br><span class="token-code" style="font-size:11px;">' + doc.id + '</span></td><td>' + fmtWaktu(d.expired_at) + '</td><td>' + badge + '</td></tr>';
   });
   el.innerHTML = '<div class="sheet-wrap"><table class="sheet" style="min-width:420px;"><thead><tr><th>Petugas</th><th>Berlaku s/d</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+  // Ketuk baris QR -> menu: Tampilkan ulang / Perpanjang & aktifkan / Hapus
+  el.querySelectorAll('tr.baris-qr').forEach(tr => {
+    tr.addEventListener('click', function(e){
+      e.stopPropagation();
+      const rect = this.getBoundingClientRect();
+      tampilkanMenuKonteks(e.clientX || rect.left, e.clientY || rect.top, menuQrToken(this.dataset.id, this.dataset.nama));
+    });
+  });
+}
+
+function menuQrToken(tokenId, namaPetugas){
+  const ref = db.collection('qr_tokens').doc(tokenId);
+  return [
+    {label: 'Tampilkan QR…', aksi: () => tampilkanQrUlang(tokenId, namaPetugas)},
+    {label: 'Perpanjang 36 jam & aktifkan', aksi: () => {
+      mulaiBusy('Memperpanjang QR…');
+      ref.update({
+        status: 'aktif',
+        expired_at: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 36*60*60*1000)),
+        assigned_uid: null
+      }).then(() => showMsg(app, 'QR "' + (namaPetugas||'(tanpa nama)') + '" diperpanjang & aktif. Sesi petugas lama otomatis berakhir.', 'ok'))
+        .catch(e => showMsg(app, 'Gagal: ' + (e.message||e)))
+        .finally(selesaiBusy);
+    }},
+    '-',
+    {label: 'Hapus QR', bahaya: true, aksi: () => {
+      if(!confirm('Hapus QR petugas "' + (namaPetugas||'(tanpa nama)') + '"? Sesi petugas yang memakainya akan berakhir.')) return;
+      mulaiBusy('Menghapus QR…');
+      ref.delete()
+        .then(() => showMsg(app, 'QR dihapus.', 'ok'))
+        .catch(e => showMsg(app, 'Gagal: ' + (e.message||e)))
+        .finally(selesaiBusy);
+    }}
+  ];
+}
+
+async function tampilkanQrUlang(tokenId, namaPetugas){
+  mulaiBusy('Menyiapkan QR…');
+  try{
+    await muatLibraryQrCode();
+    const qrArea = document.getElementById('qrArea');
+    if(!qrArea) return;
+    qrArea.style.display = 'block';
+    const linkUrl = window.location.origin + window.location.pathname + '?akses=' + tokenId;
+    qrArea.innerHTML = `
+      <h2>QR Petugas — ${esc(namaPetugas||'(tanpa nama)')}</h2>
+      <div class="qr-box">
+        <div id="qrcanvas"></div>
+        <div class="token-code">${tokenId}</div>
+        <p class="muted" style="word-break:break-all;"><code>${linkUrl}</code></p>
+      </div>`;
+    new QRCode(document.getElementById('qrcanvas'), {text: linkUrl, width: 200, height: 200});
+    qrArea.scrollIntoView({behavior:'smooth', block:'start'});
+  }catch(e){
+    showMsg(app, 'Gagal menampilkan QR: ' + (e.message||e));
+  }finally{
+    selesaiBusy();
+  }
 }
 
 async function bersihkanLogKedaluwarsa(){
