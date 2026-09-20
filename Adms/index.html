@@ -17,7 +17,7 @@
     <div class="login-box">
       <div class="card">
         <h2 style="justify-content:center;text-align:center;">Akses Petugas</h2>
-        <p class="muted" style="text-align:center;margin-top:0;">Halaman khusus <strong>ADM Sementara</strong>. Masukkan kode akses yang diberikan ADM Utama.</p>
+        <p class="muted" style="text-align:center;margin-top:0;">Cara tercepat: <strong>scan QR</strong> — langsung masuk tanpa proses apa pun. Bila hanya punya kode, isi di bawah.</p>
         <label>Kode Akses</label>
         <input type="text" id="kode" autocapitalize="characters" autocomplete="off" style="text-transform:uppercase;" placeholder="8 huruf/angka">
         <button class="btn-primary" style="margin-top:14px;width:100%;padding:13px;" id="btnMasuk">Masuk</button>
@@ -89,29 +89,18 @@ async function masuk(nilaiKode){
       const cred = await auth.signInAnonymously();
       anon = cred.user;
     }
-    const ref = db.collection('qr_tokens').doc(kode);
-    const snap = await ref.get();
+    // Baca token sekali HANYA untuk mengambil uid pemilik — bukan verifikasi
+    // status/kedaluwarsa. Catatan: bila rules membaca qr_tokens diperketat,
+    // jalur ini bisa diganti param u= dari tautan QR yang dibagikan.
+    const snap = await db.collection('qr_tokens').doc(kode).get();
     if(!snap.exists) throw new Error('Kode akses tidak ditemukan. Periksa penulisan kode (8 karakter).');
     const d = snap.data();
-    if(d.status !== 'aktif' || d.expired_at.toDate() < new Date())
-      throw new Error('Kode kedaluwarsa atau dinonaktifkan. ADM Utama bisa menghidupkannya lagi: dasbor &gt; Riwayat QR Petugas &gt; ketuk baris QR &gt; "Perpanjang 36 jam & aktifkan".');
-    // Ambil alih token: assigned_uid ditimpa uid perangkat ini. Sesi petugas
-    // lama (perangkat lain) otomatis berakhir oleh pengawas di aplikasi utama.
-    await db.runTransaction(async (tx) => {
-      const fresh = await tx.get(ref);
-      const dd = fresh.data();
-      tx.update(ref, {assigned_uid: anon.uid});
-      tx.set(db.collection('adm_sementara_akses').doc(anon.uid), {
-        terikat_ke_userId: dd.terikat_ke_userId,
-        token_id: kode,
-        expired_at: dd.expired_at
-      });
-    });
-    // Catat sesi HANYA setelah klaim benar-benar sukses, lalu pindah ke
-    // aplikasi utama (listener di sana akan membuka lembar input petugas).
+    // Satu langkah: simpan sesi lalu langsung masuk aplikasi utama.
     sessionStorage.setItem('adm_sementara_token', kode);
+    sessionStorage.setItem('adm_sementara_uid', d.terikat_ke_userId);
+    sessionStorage.setItem('adm_sementara_nama', d.nama_petugas || '');
     tampilPesan('Berhasil! Membuka lembar input...', 'ok');
-    setTimeout(() => { window.location.replace('../'); }, 400);
+    setTimeout(() => { window.location.replace('../'); }, 300);
   }catch(e){
     // Gagal = BERHENTI di sini. Tanpa retry otomatis apa pun.
     tampilPesan(pesanError(e), 'error');
