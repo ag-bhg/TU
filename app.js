@@ -76,6 +76,103 @@ function showMsg(container, text, type='error', durasi=6000){
 function esc(s){
   return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ===== INDIKATOR LOADING: blokir seluruh sentuhan saat proses berjalan =====
+function mulaiBusy(teks){
+  let ov = document.getElementById('busyOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'busyOverlay';
+    ov.className = 'busy-overlay';
+    ov.innerHTML = '<div class="busy-box"><div class="busy-spinner"></div><div class="busy-text"></div></div>';
+    document.body.appendChild(ov);
+  }
+  ov.querySelector('.busy-text').textContent = teks || 'Memproses…';
+  ov.hidden = false;
+  document.body.classList.add('busy');
+}
+function selesaiBusy(){
+  const ov = document.getElementById('busyOverlay');
+  if(ov) ov.hidden = true;
+  document.body.classList.remove('busy');
+}
+
+// ===== MENU KONTEKS ala klik-kanan Windows (teks saja) =====
+let ctxMenuEl = null;
+function tutupMenuKonteks(){
+  if(ctxMenuEl){ ctxMenuEl.remove(); ctxMenuEl = null; }
+}
+document.addEventListener('click', (e) => {
+  if(ctxMenuEl && !ctxMenuEl.contains(e.target)) tutupMenuKonteks();
+});
+window.addEventListener('scroll', tutupMenuKonteks, true);
+function tampilkanMenuKonteks(x, y, item){
+  tutupMenuKonteks();
+  const m = document.createElement('div');
+  m.className = 'ctx-menu';
+  item.forEach((it, idx) => {
+    if(it === '-'){
+      const sep = document.createElement('div');
+      sep.className = 'ctx-sep';
+      m.appendChild(sep);
+      return;
+    }
+    const b = document.createElement('button');
+    b.className = 'ctx-item' + (it.bahaya ? ' bahaya' : '');
+    b.textContent = it.label;
+    b.onclick = (ev) => { ev.stopPropagation(); tutupMenuKonteks(); it.aksi(); };
+    m.appendChild(b);
+  });
+  document.body.appendChild(m);
+  // Jaga menu tetap di dalam layar
+  const rect = m.getBoundingClientRect();
+  const px = Math.min(x, window.innerWidth - rect.width - 8);
+  const py = Math.min(y, window.innerHeight - rect.height - 8);
+  m.style.left = Math.max(8, px) + 'px';
+  m.style.top = Math.max(8, py) + 'px';
+  ctxMenuEl = m;
+}
+
+// ===== DIALOG EDIT BARIS =====
+function bukaDialogEdit({judul, fields, onSimpan}){
+  const dlg = document.createElement('div');
+  dlg.className = 'edit-dialog';
+  const formHtml = fields.map(f => `
+    <label>${f.label}</label>
+    <input type="text" data-ef="${f.key}" value="${esc(f.nilai)}" ${f.numerik?'inputmode="numeric" style="text-align:right;"':''}>
+  `).join('');
+  dlg.innerHTML = `
+    <div class="edit-box">
+      <h3>${esc(judul)}</h3>
+      ${formHtml}
+      <div class="edit-actions">
+        <button class="btn-outline" data-batal>Batal</button>
+        <button class="btn-primary" data-simpan>Simpan</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(dlg);
+  const inputs = dlg.querySelectorAll('input[data-ef]');
+  if(inputs[0]) inputs[0].focus();
+  dlg.querySelector('[data-batal]').onclick = () => dlg.remove();
+  dlg.addEventListener('keydown', e => { if(e.key === 'Escape') dlg.remove(); });
+  dlg.querySelector('[data-simpan]').onclick = async () => {
+    const nilai = {};
+    inputs.forEach(inp => {
+      const k = inp.dataset.ef;
+      nilai[k] = (k === 'rp') ? (parseInt(inp.value.replace(/[^0-9]/g,''),10)||0) : inp.value.trim();
+    });
+    dlg.remove();
+    mulaiBusy('Menyimpan perubahan…');
+    try{
+      await onSimpan(nilai);
+    }catch(e){
+      showMsg(app, 'Gagal menyimpan: ' + (e.message||e));
+    }finally{
+      selesaiBusy();
+    }
+  };
+}
 function pesanErrorAuth(e){
   const code = e && e.code ? e.code : '';
   if(code === 'auth/operation-not-allowed' || code === 'auth/admin-restricted-operation')
@@ -194,6 +291,7 @@ function renderLogin(kodeQr){
     const p = pass.value;
     if(!v) return showMsg(msgArea, 'Isi kode akses / username / email.');
     btn.disabled = true; btn.textContent = 'Memproses...';
+    mulaiBusy('Memeriksa akun…');
 
     (async () => {
       try{
@@ -205,14 +303,15 @@ function renderLogin(kodeQr){
         }
         // (2) Username polos -> domain internal
         if(!isEmail){
-          if(!p) return showMsg(msgArea, 'Username membutuhkan password.');
+          if(!p){ selesaiBusy(); return showMsg(msgArea, 'Username membutuhkan password.'); }
           await auth.signInWithEmailAndPassword(v.toLowerCase() + EMAIL_DOMAIN, p);
           return;
         }
         // (3) Email -> ADM Utama
-        if(!p) return showMsg(msgArea, 'Email membutuhkan password.');
+        if(!p){ selesaiBusy(); return showMsg(msgArea, 'Email membutuhkan password.'); }
         await auth.signInWithEmailAndPassword(v.toLowerCase(), p);
       }catch(e){
+        selesaiBusy();
         showMsg(msgArea, pesanErrorAuth(e), 'error', 15000);
         btn.disabled = false; btn.textContent = 'Masuk';
       }
@@ -230,40 +329,46 @@ function renderLogin(kodeQr){
 }
 
 async function masukDenganKode(token){
-  let anonUser = auth.currentUser;
-  if(!anonUser || !anonUser.isAnonymous){
-    const cred = await auth.signInAnonymously();
-    anonUser = cred.user;
-  }
-  // Catat kode SEGERA sebelum pembacaan — mencegah race dengan listener auth
-  sessionStorage.setItem('adm_sementara_token', token);
-  const tokenRef = db.collection('qr_tokens').doc(token);
-  const snap = await tokenRef.get();
-  if(!snap.exists){
-    sessionStorage.removeItem('adm_sementara_token');
-    throw new Error('Kode akses tidak ditemukan. Periksa penulisan kode (8 karakter).');
-  }
-  const data = snap.data();
-  if(data.status !== 'aktif' || data.expired_at.toDate() < new Date()){
-    sessionStorage.removeItem('adm_sementara_token');
-    throw new Error('Kode akses kedaluwarsa atau dinonaktifkan. Minta ADM Utama membuat QR baru.');
-  }
-  await db.runTransaction(async (tx) => {
-    const fresh = await tx.get(tokenRef);
-    const d = fresh.data();
-    tx.update(tokenRef, {assigned_uid: anonUser.uid});
-    tx.set(db.collection('adm_sementara_akses').doc(anonUser.uid), {
-      terikat_ke_userId: d.terikat_ke_userId,
-      token_id: token,
-      expired_at: d.expired_at
+  mulaiBusy('Memverifikasi kode akses…');
+  try{
+    let anonUser = auth.currentUser;
+    if(!anonUser || !anonUser.isAnonymous){
+      const cred = await auth.signInAnonymously();
+      anonUser = cred.user;
+    }
+    // Catat kode SEGERA sebelum pembacaan — mencegah race dengan listener auth
+    sessionStorage.setItem('adm_sementara_token', token);
+    const tokenRef = db.collection('qr_tokens').doc(token);
+    const snap = await tokenRef.get();
+    if(!snap.exists){
+      sessionStorage.removeItem('adm_sementara_token');
+      throw new Error('Kode akses tidak ditemukan. Periksa penulisan kode (8 karakter).');
+    }
+    const data = snap.data();
+    if(data.status !== 'aktif' || data.expired_at.toDate() < new Date()){
+      sessionStorage.removeItem('adm_sementara_token');
+      throw new Error('Kode akses kedaluwarsa atau dinonaktifkan. Minta ADM Utama membuat QR baru.');
+    }
+    mulaiBusy('Membuka lembar input…');
+    await db.runTransaction(async (tx) => {
+      const fresh = await tx.get(tokenRef);
+      const d = fresh.data();
+      tx.update(tokenRef, {assigned_uid: anonUser.uid});
+      tx.set(db.collection('adm_sementara_akses').doc(anonUser.uid), {
+        terikat_ke_userId: d.terikat_ke_userId,
+        token_id: token,
+        expired_at: d.expired_at
+      });
     });
-  });
-  history.replaceState(null, '', window.location.pathname);
-  currentRole = 'adm_sementara';
-  admSession = {tokenId: token, ...data, assigned_uid: anonUser.uid};
-  appHeader.style.display = 'flex';
-  whoAmI.textContent = 'Petugas: ' + (data.nama_petugas||'-');
-  renderInputSheet();
+    history.replaceState(null, '', window.location.pathname);
+    currentRole = 'adm_sementara';
+    admSession = {tokenId: token, ...data, assigned_uid: anonUser.uid};
+    appHeader.style.display = 'flex';
+    whoAmI.textContent = 'Petugas: ' + (data.nama_petugas||'-');
+    renderInputSheet();
+  }finally{
+    selesaiBusy();
+  }
 }
 
 // ================= LEMBAR INPUT + TABEL =================
@@ -273,6 +378,9 @@ function targetUserUid(){
 }
 
 function renderInputSheet(){
+  // Status TIDAK diinput petugas (ADM Sementara) — otomatis 'Belum';
+  // hanya Akun User/ADM Utama yang memilih status saat menambah.
+  const pilihStatus = currentRole !== 'adm_sementara';
   app.innerHTML = `
     <div class="card quick-card">
       <h2>Tambah Tamu <span class="sync-pill" id="syncPill"><span class="dot"></span><span id="syncText">menyiapkan…</span></span></h2>
@@ -280,10 +388,11 @@ function renderInputSheet(){
         <input type="text" id="qNama" placeholder="Nama tamu" autocomplete="off">
         <input type="text" id="qAlamat" placeholder="Alamat (opsional)" autocomplete="off" list="addrList">
         <input type="text" id="qRp" inputmode="numeric" placeholder="Rp0" style="text-align:right;">
+        ${pilihStatus ? `
         <select id="qStatus">
           <option value="belum">Belum</option>
           <option value="sudah">Sudah</option>
-        </select>
+        </select>` : ''}
         <button class="btn-primary" id="qTambah">+ Tambah</button>
       </div>
       <datalist id="addrList"></datalist>
@@ -292,7 +401,7 @@ function renderInputSheet(){
       <h2>Daftar Tamu <span class="muted" id="jmlTamu"></span></h2>
       <div class="sheet-wrap">
         <table class="sheet">
-          <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Sumbangan</th><th class="tcol-status">Status</th><th class="tcol-aksi">Aksi</th></tr></thead>
+          <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Sumbangan</th><th class="tcol-status">Status</th></tr></thead>
           <tbody id="sheetBody"></tbody>
           <tfoot>
             <tr class="sheet-total">
@@ -303,7 +412,7 @@ function renderInputSheet(){
           </tfoot>
         </table>
       </div>
-      <p class="footer-note">Ketuk sel untuk mengubah isinya — tersimpan otomatis. Ketuk kolom Status untuk ganti Belum/Sudah.</p>
+      <p class="footer-note">Ketuk baris untuk membuka menu: Edit / Hapus — seperti klik kanan di Windows.</p>
     </div>
   `;
 
@@ -325,20 +434,22 @@ function pasangFormCepat(){
   });
 
   async function tambah(){
+    if(btn.disabled) return;
     const nama = eNama.value.trim();
     if(!nama){ eNama.focus(); return; }
+    btn.disabled = true; btn.textContent = 'Menyimpan…';
     const item = {
       nama,
       alamat: eAlamat.value.trim(),
       rp: parseInt(eRp.value.replace(/[^0-9]/g,''),10) || 0,
-      status: eStatus.value,
+      status: eStatus ? eStatus.value : 'belum',
       permanen: currentRole === 'akun_user',
       dicatat_oleh: currentRole === 'adm_sementara' ? 'adm_sementara' : 'user',
       dicatat_pada: firebase.firestore.FieldValue.serverTimestamp()
     };
     // Kosongkan & fokus DULU — petugas langsung mengetik tamu berikutnya
     // tanpa menunggu jaringan; penulisan berjalan di belakang.
-    eNama.value=''; eAlamat.value=''; eRp.value=''; eStatus.value='belum';
+    eNama.value=''; eAlamat.value=''; eRp.value=''; if(eStatus) eStatus.value='belum';
     eNama.focus();
 
     try{
@@ -351,11 +462,13 @@ function pasangFormCepat(){
       if(currentRole === 'adm_sementara') tulisLog(item.nama);
     }catch(e){
       showMsg(app.querySelector('.quick-card'), 'Gagal menyimpan: ' + (e.message||e) + ' — cek koneksi lalu ulangi.', 'error', 10000);
+    }finally{
+      btn.disabled = false; btn.textContent = '+ Tambah';
     }
   }
 
   btn.onclick = tambah;
-  [eNama, eAlamat, eRp, eStatus].forEach(el => {
+  [eNama, eAlamat, eRp, eStatus].filter(Boolean).forEach(el => {
     el.addEventListener('keydown', e => { if(e.key === 'Enter') tambah(); });
   });
   eNama.focus();
@@ -407,17 +520,17 @@ function renderTabel(snap){
     if(t.status === 'sudah') sudah++;
     if(t.alamat && addrSuggestions.length < 60) addrSuggestions.push(t.alamat);
     const pending = doc.metadata.hasPendingWrites ? ' baru' : '';
+    // Sel tampil sebagai teks pola; klik di mana pun pada baris membuka menu
     rows += `
-      <tr class="${pending.trim()}" data-id="${doc.id}">
+      <tr class="baris-tamu ${pending.trim()}" data-id="${doc.id}" data-nama="${esc(t.nama)}" data-alamat="${esc(t.alamat||'')}" data-rp="${Number(t.rp)||0}" data-status="${t.status==='sudah'?'sudah':'belum'}">
         <td class="tcol-no">${i}</td>
-        <td><input data-f="nama" value="${esc(t.nama)}"></td>
-        <td><input data-f="alamat" value="${esc(t.alamat||'')}" list="addrList"></td>
-        <td><input data-f="rp" inputmode="numeric" value="${esc(t.rp?Number(t.rp).toLocaleString('id-ID'):'')}" style="text-align:right;"></td>
-        <td class="tcol-status" data-status="${t.status==='sudah'?'sudah':'belum'}" style="text-align:center;cursor:pointer;"><span class="badge ${t.status==='sudah'?'aktif':'belum'}">${t.status==='sudah'?'Sudah':'Belum'}</span></td>
-        <td class="tcol-aksi"><button title="Hapus baris" data-del="${doc.id}">🗑️</button></td>
+        <td>${esc(t.nama)}</td>
+        <td>${esc(t.alamat||'')}</td>
+        <td style="text-align:right;padding-right:8px;">${t.rp ? fmtRp(t.rp) : '—'}</td>
+        <td class="tcol-status" style="text-align:center;"><span class="badge ${t.status==='sudah'?'aktif':'belum'}">${t.status==='sudah'?'Sudah':'Belum'}</span></td>
       </tr>`;
   });
-  body.innerHTML = rows || '<tr><td colspan="6"><p class="empty">Belum ada tamu. Ketik di form atas — tekan Enter untuk tambah cepat.</p></td></tr>';
+  body.innerHTML = rows || '<tr><td colspan="5"><p class="empty">Belum ada tamu. Ketik di form atas — tekan Enter untuk tambah cepat.</p></td></tr>';
   const dl = document.getElementById('addrList');
   if(dl) dl.innerHTML = addrSuggestions.map(a=>'<option value="'+esc(a)+'">').join('');
   const totalEl = document.getElementById('totalRp');
@@ -427,46 +540,51 @@ function renderTabel(snap){
   const jml = document.getElementById('jmlTamu');
   if(jml) jml.textContent = '(' + i + ')';
 
-  body.querySelectorAll('input[data-f]').forEach(inp => {
-    inp.addEventListener('focus', function(){ this.dataset.asli = this.value; });
-    inp.addEventListener('keydown', function(e){ if(e.key === 'Enter') this.blur(); });
-    inp.addEventListener('blur', function(){ simpanSel(this); });
-  });
-  body.querySelectorAll('td.tcol-status').forEach(td => {
-    td.addEventListener('click', function(){
-      const baru = this.dataset.status === 'sudah' ? 'belum' : 'sudah';
-      const id = this.closest('tr').dataset.id;
-      db.collection('akun_user').doc(targetUserUid()).collection('tamu').doc(id)
-        .update({status: baru})
-        .catch(e => showMsg(app, 'Gagal mengubah status: ' + (e.message||e)));
-    });
-  });
-  body.querySelectorAll('button[data-del]').forEach(b => {
-    b.addEventListener('click', function(){
-      const id = this.dataset.del;
-      db.collection('akun_user').doc(targetUserUid()).collection('tamu').doc(id)
-        .delete()
-        .catch(e => showMsg(app, 'Gagal menghapus: ' + (e.message||e)));
+  // Klik/tap baris -> menu konteks (Edit / Hapus / Ganti status)
+  body.querySelectorAll('tr.baris-tamu').forEach(tr => {
+    tr.addEventListener('click', function(e){
+      const rect = this.getBoundingClientRect();
+      tampilkanMenuKonteks(e.clientX || rect.left, e.clientY || rect.top, menuBarisTamu(this));
     });
   });
 }
 
-async function simpanSel(inp){
-  const id = inp.closest('tr').dataset.id;
-  const f = inp.dataset.f;
-  const asli = inp.dataset.asli || '';
-  let val = inp.value;
-  if(f === 'rp') val = parseInt(String(val).replace(/[^0-9]/g,''),10) || 0;
-  else val = val.trim();
-  if(String(val) === String(asli)) return;
-  try{
-    await db.collection('akun_user').doc(targetUserUid()).collection('tamu').doc(id)
-      .update({[f]: val});
-    if(f === 'rp') inp.value = val ? Number(val).toLocaleString('id-ID') : '';
-  }catch(e){
-    inp.value = asli;
-    showMsg(app, 'Gagal menyimpan: ' + (e.message||e));
-  }
+function menuBarisTamu(tr){
+  const id = tr.dataset.id;
+  const ref = db.collection('akun_user').doc(targetUserUid()).collection('tamu').doc(id);
+  const item = [
+    {label: 'Edit data…', aksi: () => bukaDialogEditBaris(tr, ref)},
+    {label: tr.dataset.status === 'sudah' ? 'Tandai Belum kembali' : 'Tandai Sudah kembali',
+     aksi: () => {
+       mulaiBusy('Mengubah status…');
+       ref.update({status: tr.dataset.status === 'sudah' ? 'belum' : 'sudah'})
+         .catch(e => showMsg(app, 'Gagal mengubah status: ' + (e.message||e)))
+         .finally(selesaiBusy);
+     }},
+    '-',
+    {label: 'Hapus data', bahaya: true, aksi: () => {
+       if(!confirm('Hapus data tamu "' + tr.dataset.nama + '"?')) return;
+       mulaiBusy('Menghapus…');
+       ref.delete()
+         .catch(e => showMsg(app, 'Gagal menghapus: ' + (e.message||e)))
+         .finally(selesaiBusy);
+     }}
+  ];
+  return item;
+}
+
+function bukaDialogEditBaris(tr, ref){
+  bukaDialogEdit({
+    judul: 'Edit — ' + tr.dataset.nama,
+    fields: [
+      {key: 'nama', label: 'Nama', nilai: tr.dataset.nama},
+      {key: 'alamat', label: 'Alamat', nilai: tr.dataset.alamat},
+      {key: 'rp', label: 'Sumbangan (Rp)', nilai: tr.dataset.rp && Number(tr.dataset.rp) ? Number(tr.dataset.rp).toLocaleString('id-ID') : '', numerik: true}
+    ],
+    onSimpan: async (nilai) => {
+      await ref.update(nilai);
+    }
+  });
 }
 
 function pasangTimerSesi(){
@@ -517,12 +635,15 @@ async function renderAdmDashboard(){
     </div>
   `;
 
-  document.getElementById('auSubmit').onclick = async () => {
+  async function buatAkun(){
     const uEl = document.getElementById('auUsername');
     const pEl = document.getElementById('auPassword');
+    const btn = document.getElementById('auSubmit');
     const username = uEl.value.trim().toLowerCase().replace(/\s+/g,'-');
     const password = pEl.value;
     if(!username || password.length < 6) return showMsg(document.getElementById('auMsg'), 'Username wajib diisi & password minimal 6 karakter.');
+    btn.disabled = true;
+    mulaiBusy('Membuat akun…');
     try{
       const secondaryApp = firebase.initializeApp(firebaseConfig, 'secondary-' + Date.now());
       const secondaryAuth = secondaryApp.auth();
@@ -540,8 +661,12 @@ async function renderAdmDashboard(){
       muatDaftarAkun();
     }catch(e){
       showMsg(document.getElementById('auMsg'), 'Gagal membuat akun: ' + (e.message||e));
+    }finally{
+      selesaiBusy();
+      btn.disabled = false;
     }
-  };
+  }
+  document.getElementById('auSubmit').onclick = buatAkun;
 
   muatDaftarAkun();
   muatLog();
@@ -563,31 +688,47 @@ async function muatDaftarAkun(){
   snap.forEach(doc => {
     const d = doc.data(); i++;
     rows += `
-      <tr data-id="${doc.id}">
+      <tr class="baris-akun" data-id="${doc.id}" data-username="${esc(d.username)}" data-kuota="${d.kuota_total||0}">
         <td class="tcol-no">${i}</td>
-        <td><input data-f="username" value="${esc(d.username)}"><div class="muted" style="padding:0 6px 4px;">${fmtWaktu(d.dibuat_tanggal)}</div></td>
-        <td><input data-f="kuota_total" inputmode="numeric" value="${d.kuota_total||0}" style="text-align:right;"></td>
-        <td class="tcol-aksi"><button title="Buka lembar tamu akun ini" data-buka="${doc.id}">📄</button></td>
+        <td>${esc(d.username)}<div class="muted" style="padding:2px 0 0;">${fmtWaktu(d.dibuat_tanggal)}</div></td>
+        <td style="text-align:right;padding-right:8px;">${d.kuota_terpakai||0} / ${d.kuota_total||0}</td>
+        <td class="tcol-aksi" style="padding-top:8px;"> Kelola &rsaquo; </td>
       </tr>`;
   });
   body.innerHTML = rows;
 
-  body.querySelectorAll('input[data-f]').forEach(inp => {
-    inp.addEventListener('focus', function(){ this.dataset.asli = this.value; });
-    inp.addEventListener('keydown', function(e){ if(e.key==='Enter') this.blur(); });
-    inp.addEventListener('blur', async function(){
-      const id = this.closest('tr').dataset.id;
-      const f = this.dataset.f;
-      let val = f === 'kuota_total' ? (parseInt(this.value.replace(/[^0-9]/g,''),10)||0) : this.value.trim().toLowerCase().replace(/\s+/g,'-');
-      if(String(val) === String(this.dataset.asli)) return;
-      try{
-        await db.collection('akun_user').doc(id).update({[f]: val});
-        this.dataset.asli = this.value;
-      }catch(e){ this.value = this.dataset.asli; showMsg(app, 'Gagal menyimpan: '+(e.message||e)); }
+  body.querySelectorAll('tr.baris-akun').forEach(tr => {
+    tr.addEventListener('click', function(e){
+      const rect = this.getBoundingClientRect();
+      tampilkanMenuKonteks(e.clientX || rect.left, e.clientY || rect.top, [
+        {label: 'Buka lembar tamu…', aksi: () => bukaLembarAkun(this.dataset.id)},
+        {label: 'Tambah 500 kuota', aksi: () => {
+          mulaiBusy('Menambah kuota…');
+          db.collection('akun_user').doc(this.dataset.id)
+            .update({kuota_total: firebase.firestore.FieldValue.increment(500)})
+            .catch(err => showMsg(app, 'Gagal: ' + (err.message||err)))
+            .finally(selesaiBusy);
+        }},
+        '-',
+        {label: 'Edit username / kuota…', aksi: () => {
+          const id = this.dataset.id;
+          bukaDialogEdit({
+            judul: 'Edit akun — ' + this.dataset.username,
+            fields: [
+              {key: 'username', label: 'Username', nilai: this.dataset.username},
+              {key: 'kuota_total', label: 'Kuota total', nilai: this.dataset.kuota, numerik: true}
+            ],
+            onSimpan: async (nilai) => {
+              await db.collection('akun_user').doc(id).update({
+                username: nilai.username.toLowerCase().replace(/\s+/g,'-'),
+                kuota_total: nilai.kuota_total
+              });
+              muatDaftarAkun();
+            }
+          });
+        }}
+      ]);
     });
-  });
-  body.querySelectorAll('button[data-buka]').forEach(b => {
-    b.addEventListener('click', () => bukaLembarAkun(b.dataset.buka));
   });
 }
 
@@ -623,12 +764,18 @@ async function bukaLembarAkun(userId){
   `;
 
   document.getElementById('backBtn').onclick = renderAdmDashboard;
-  document.getElementById('genQrBtn').onclick = () => buatQrToken(userId, d.username);
+  document.getElementById('genQrBtn').onclick = async () => {
+    mulaiBusy('Membuat QR petugas…');
+    try{ await buatQrToken(userId, d.username); }
+    finally{ selesaiBusy(); }
+  };
   document.getElementById('addKuotaBtn').onclick = async () => {
+    mulaiBusy('Menambah kuota…');
     try{
       await db.collection('akun_user').doc(userId).update({kuota_total: firebase.firestore.FieldValue.increment(500)});
       showMsg(document.getElementById('detailMsg'), 'Kuota +500.', 'ok');
     }catch(e){ showMsg(document.getElementById('detailMsg'), 'Gagal: '+(e.message||e)); }
+    finally{ selesaiBusy(); }
   };
 
   if(onSnapshotUnsub) onSnapshotUnsub();
@@ -645,11 +792,12 @@ async function bukaLembarAkun(userId){
 }
 
 async function buatQrToken(userId, username){
-  const namaPetugas = prompt('Nama petugas (untuk catatan):');
-  if(namaPetugas === null || !namaPetugas.trim()) return;
-  const tokenId = randomToken(8);
-  const expiredAt = new Date(Date.now() + 36*60*60*1000);
+  mulaiBusy('Membuat QR petugas…');
   try{
+    const namaPetugas = prompt('Nama petugas (untuk catatan):');
+    if(namaPetugas === null || !namaPetugas.trim()) return;
+    const tokenId = randomToken(8);
+    const expiredAt = new Date(Date.now() + 36*60*60*1000);
     await db.collection('qr_tokens').doc(tokenId).set({
       terikat_ke_userId: userId,
       nama_petugas: namaPetugas.trim(),
@@ -660,25 +808,26 @@ async function buatQrToken(userId, username){
       settled: false,
       dibuat_oleh: currentUser.uid
     });
-  }catch(e){
-    return showMsg(document.getElementById('detailMsg'), 'Gagal membuat QR: '+(e.message||e));
-  }
 
-  await muatLibraryQrCode();
-  const qrArea = document.getElementById('qrArea');
-  qrArea.style.display = 'block';
-  const linkUrl = window.location.origin + window.location.pathname + '?akses=' + tokenId;
-  qrArea.innerHTML = `
-    <h2>QR Petugas — ${esc(namaPetugas)}</h2>
-    <div class="qr-box">
-      <div id="qrcanvas"></div>
-      <div class="token-code">${tokenId}</div>
-      <p class="muted">Untuk akun "${esc(username)}" • berlaku sampai ${fmtWaktu(firebase.firestore.Timestamp.fromDate(expiredAt))}</p>
-      <p class="muted" style="word-break:break-all;"><code>${linkUrl}</code></p>
-    </div>
-  `;
-  new QRCode(document.getElementById('qrcanvas'), {text: linkUrl, width: 200, height: 200});
-  muatTokenList(userId);
+    await muatLibraryQrCode();
+    const qrArea = document.getElementById('qrArea');
+    qrArea.style.display = 'block';
+    const linkUrl = window.location.origin + window.location.pathname + '?akses=' + tokenId;
+    qrArea.innerHTML = `
+      <h2>QR Petugas — ${esc(namaPetugas)}</h2>
+      <div class="qr-box">
+        <div id="qrcanvas"></div>
+        <div class="token-code">${tokenId}</div>
+        <p class="muted">Untuk akun "${esc(username)}" • berlaku sampai ${fmtWaktu(firebase.firestore.Timestamp.fromDate(expiredAt))}</p>
+        <p class="muted" style="word-break:break-all;"><code>${linkUrl}</code></p>
+      </div>
+    `;
+    new QRCode(document.getElementById('qrcanvas'), {text: linkUrl, width: 200, height: 200});
+    muatTokenList(userId);
+  }catch(e){
+    const el = document.getElementById('detailMsg');
+    if(el) showMsg(el, 'Gagal membuat QR: ' + (e.message||e));
+  }
 }
 
 async function muatTokenList(userId){
