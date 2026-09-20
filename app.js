@@ -35,7 +35,7 @@ let admSession = null;
 let timerInterval = null;
 let onSnapshotUnsub = null;
 let tokenWatchUnsub = null;   // pengawas realtime token QR (auto-logout sesi lama)
-let gagalKodeCount = 0;       // hitungan kode salah — toleran sampai 20x tanpa blokir
+let gagalKodeCount = 0;       // hitungan kode salah di login utama — 20x tanpa blokir
 let cooldownSampai = 0;       // jeda lokal singkat setelah batas percobaan (ms epoch)
 
 const app = document.getElementById('app');
@@ -208,22 +208,20 @@ auth.onAuthStateChanged(async (user) => {
   if(onSnapshotUnsub){ onSnapshotUnsub(); onSnapshotUnsub = null; }
   hentikanPengawasToken();
 
-  const akses = new URLSearchParams(window.location.search).get('akses') || '';
-
-  if(akses && user && !user.isAnonymous){
-    await auth.signOut();
+  // Kode akses QR di URL (?akses=KODE) BUKAN urusan halaman utama —
+  // pemrosesannya kini milik halaman petugas /Adms (auto-proses maksimal 1x,
+  // gagal = berhenti, tanpa loop retry seperti insiden sebelumnya).
+  const aksesUrl = new URLSearchParams(window.location.search).get('akses');
+  if(aksesUrl && !user){
+    renderLogin(null, aksesUrl);
     return;
   }
-  if(akses && user && user.isAnonymous && sessionStorage.getItem('adm_sementara_token') !== akses){
-    sessionStorage.removeItem('adm_sementara_token');
-    await auth.signOut();
-    return;
-  }
+  const akses = '';
 
   if(!user){
     currentUser = null; currentRole = null; currentUserData = null; admSession = null;
     appHeader.style.display = 'none';
-    renderLogin(akses);
+    renderLogin(akses, aksesUrl);
     return;
   }
   currentUser = user;
@@ -278,8 +276,15 @@ auth.onAuthStateChanged(async (user) => {
 });
 
 // ================= LOGIN 1 PINTU =================
-function renderLogin(kodeQr){
+function renderLogin(kodeQr, aksesUrl){
   clearInterval(timerInterval);
+  // Petugas: arahkan lembut ke halaman khusus /Adms, lalu halaman utama
+  // berhenti sama sekali (tidak menggambar apa pun) — QR lama tetap jalan.
+  if(aksesUrl){
+    app.innerHTML = '<div class="card"><p class="empty">Mengarahkan ke halaman petugas…</p></div>';
+    window.location.replace('Adms/?akses=' + encodeURIComponent(aksesUrl));
+    return;
+  }
   app.innerHTML = `
     <div class="center">
       <div class="login-box">
@@ -355,10 +360,9 @@ function renderLogin(kodeQr){
   pass.addEventListener('keydown', e => { if(e.key === 'Enter') proses(); });
   inp.addEventListener('keydown', e => { if(e.key === 'Enter'){ if(inp.value.includes('@')) proses(); else pass.focus(); } });
 
-  if(kodeQr){
-    inp.value = kodeQr.toUpperCase();
-    setTimeout(proses, 0);
-  }
+  // TANPA auto-proses: kode QR diproses hanya oleh halaman khusus /Adms.
+  // Dulu blok di sini mengeksekusi kode otomatis tiap render ulang -> satu
+  // kegagalan berputar tanpa henti sampai Firebase memblokir perangkat.
 }
 
 async function masukDenganKode(token){
