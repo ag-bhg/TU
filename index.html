@@ -484,6 +484,14 @@ function renderLoginQr(){
     if(btn.disabled) return; // proses sedang berjalan — cegah ketukan ganda
     const token = document.getElementById('qrTokenInput').value.trim().toUpperCase();
     if(!token) return showMsg(card, 'Masukkan kode akses.');
+    // Cooldown setelah Firebase memblokir perangkat (auth/too-many-requests):
+    // mencegah percobaan berulang yang justru memperpanjang blokirnya.
+    const cdUntil = parseInt(localStorage.getItem('qr_cooldown_until')||'0',10);
+    if(Date.now() < cdUntil){
+      const sisa = Math.max(1, Math.ceil((cdUntil - Date.now())/60000));
+      return showMsg(card, 'Firebase sedang memblokir sementara perangkat ini karena terlalu banyak percobaan login. Tunggu sekitar ' + sisa +
+        ' menit lagi sebelum mencoba — jangan menekan berulang-ulang, itu bisa memperpanjang blokir.', 'error', 15000);
+    }
     const labelAsli = btn.textContent;
     const resetTombol = () => { btn.disabled = false; btn.textContent = labelAsli; };
     btn.disabled = true;
@@ -501,6 +509,11 @@ function renderLoginQr(){
           }
           if(e && e.code === 'auth/network-request-failed'){
             throw new Error('Koneksi ke server login terblokir (biasanya Brave Shields). Matikan Shields untuk situs ini atau pakai Chrome, lalu coba lagi.');
+          }
+          if(e && e.code === 'auth/too-many-requests'){
+            // Blokir sementara dari Firebase (biasanya jejak bug loop versi lama).
+            localStorage.setItem('qr_cooldown_until', String(Date.now() + 5*60*1000));
+            throw new Error('Firebase memblokir sementara perangkat ini karena terlalu banyak percobaan login (akibat bug lama yang sudah diperbaiki). Tunggu sekitar 1 jam, atau coba lewat jaringan berbeda (ganti WiFi/kuota). Setelah itu scan QR lagi — tidak perlu mengubah apa pun.');
           }
           throw e;
         }
