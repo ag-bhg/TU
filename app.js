@@ -415,13 +415,14 @@ function renderInputSheet(){
       <h2>Daftar Tamu <span class="muted" id="jmlTamu"></span><button class="btn-outline btn-sm" id="btnEkspor" type="button">⬇ Export ke Excel</button></h2>
       <div class="sheet-wrap">
         <table class="sheet">
-          <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Sumbangan</th><th class="tcol-status">Status</th></tr></thead>
+          <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Sumbangan</th><th class="tcol-status">Status</th><th class="tcol-aksi-hidden"></th></tr></thead>
           <tbody id="sheetBody"></tbody>
           <tfoot>
             <tr class="sheet-total">
               <td colspan="3">TOTAL SUMBANGAN</td>
               <td style="text-align:right;" id="totalRp">Rp 0</td>
-              <td colspan="2" id="totalInfo" class="muted" style="font-weight:400;"></td>
+              <td id="totalInfo" class="muted" style="font-weight:400;"></td>
+              <td class="tcol-aksi-hidden"></td>
             </tr>
           </tfoot>
         </table>
