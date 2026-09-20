@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Akses Petugas — Buku Tamu Digital</title>
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
+<link rel="stylesheet" href="../style.css">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js" defer></script>
+</head>
+<body>
+<main>
+  <div class="center">
+    <div class="login-box">
+      <div class="card">
+        <h2 style="justify-content:center;text-align:center;">Akses Petugas</h2>
+        <p class="muted" style="text-align:center;margin-top:0;">Halaman khusus <strong>ADM Sementara</strong>. Masukkan kode akses yang diberikan ADM Utama.</p>
+        <label>Kode Akses</label>
+        <input type="text" id="kode" autocapitalize="characters" autocomplete="off" style="text-transform:uppercase;" placeholder="8 huruf/angka">
+        <button class="btn-primary" style="margin-top:14px;width:100%;padding:13px;" id="btnMasuk">Masuk</button>
+        <div id="pesan"></div>
+        <p class="footer-note">Setelah berhasil, Anda langsung dibawa ke lembar input tamu.<br>Gagal? Perbaiki kodenya lalu tekan Masuk lagi — tidak ada percobaan otomatis berulang.</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAmkwpGeqhRdMWrQPa_ahW_gJ27cQ4DZIo",
+  authDomain: "buku-tamu-digital-4df8b.firebaseapp.com",
+  projectId: "buku-tamu-digital-4df8b",
+  storageBucket: "buku-tamu-digital-4df8b.firebasestorage.app",
+  messagingSenderId: "308793150877",
+  appId: "1:308793150877:web:f05f75dbe7b4619b9ab374"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+const inp = document.getElementById('kode');
+const btn = document.getElementById('btnMasuk');
+const pesan = document.getElementById('pesan');
+
+// Auto-proses dari ?akses= HANYA SEKALI. Ini kunci anti-loop: dulu di halaman
+// utama, kode di-proses ulang setiap listener auth menggambar ulang halaman,
+// sehingga satu kegagalan berputar tanpa henti sampai Firebase memblokir.
+let autoDicoba = false;
+
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function tampilPesan(html, tipe){ pesan.innerHTML = '<div class="msg ' + tipe + '">' + html + '</div>'; }
+
+function pesanError(e){
+  const code = e && e.code ? e.code : '';
+  if(code === 'auth/operation-not-allowed' || code === 'auth/admin-restricted-operation')
+    return 'Login anonim belum diaktifkan. Di Firebase Console &gt; Authentication &gt; Sign-in method, aktifkan penyedia "Anonymous".';
+  if(code === 'auth/too-many-requests')
+    return 'Server sedang menolak permintaan perangkat ini. Tunggu beberapa menit lalu tekan Masuk sekali lagi.';
+  if(code === 'auth/network-request-failed')
+    return 'Koneksi ke server terblokir (biasanya Brave Shields). Matikan Shields untuk situs ini atau pakai Chrome.';
+  if(code === 'permission-denied')
+    return 'Akses ditolak database (security rules). Minta ADM Utama memeriksa rules Firestore.';
+  return esc((e && e.message) ? e.message : 'Terjadi kesalahan.');
+}
+
+async function masuk(nilaiKode){
+  if(btn.disabled) return;
+  const kode = String(nilaiKode || '').trim().toUpperCase();
+  if(!/^[A-Z0-9]{8}$/.test(kode)){
+    tampilPesan('Kode harus tepat 8 huruf/angka tanpa spasi (contoh: DBBLHEH7).', 'error');
+    return;
+  }
+  // Yang masuk di halaman ini adalah akun utama? Jangan ganggu sesinya.
+  const kini = auth.currentUser;
+  if(kini && !kini.isAnonymous){
+    tampilPesan('Perangkat ini sedang masuk sebagai akun utama. Tekan "Keluar" di halaman utama dulu untuk masuk sebagai petugas.', 'error');
+    return;
+  }
+  btn.disabled = true; btn.textContent = 'Memproses...';
+  pesan.innerHTML = '';
+  try{
+    let anon = kini;
+    if(!anon || !anon.isAnonymous){
+      const cred = await auth.signInAnonymously();
+      anon = cred.user;
+    }
+    const ref = db.collection('qr_tokens').doc(kode);
+    const snap = await ref.get();
+    if(!snap.exists) throw new Error('Kode akses tidak ditemukan. Periksa penulisan kode (8 karakter).');
+    const d = snap.data();
+    if(d.status !== 'aktif' || d.expired_at.toDate() < new Date())
+      throw new Error('Kode kedaluwarsa atau dinonaktifkan. ADM Utama bisa menghidupkannya lagi: dasbor &gt; Riwayat QR Petugas &gt; ketuk baris QR &gt; "Perpanjang 36 jam & aktifkan".');
+    // Ambil alih token: assigned_uid ditimpa uid perangkat ini. Sesi petugas
+    // lama (perangkat lain) otomatis berakhir oleh pengawas di aplikasi utama.
+    await db.runTransaction(async (tx) => {
+      const fresh = await tx.get(ref);
+      const dd = fresh.data();
+      tx.update(ref, {assigned_uid: anon.uid});
+      tx.set(db.collection('adm_sementara_akses').doc(anon.uid), {
+        terikat_ke_userId: dd.terikat_ke_userId,
+        token_id: kode,
+        expired_at: dd.expired_at
+      });
+    });
+    // Catat sesi HANYA setelah klaim benar-benar sukses, lalu pindah ke
+    // aplikasi utama (listener di sana akan membuka lembar input petugas).
+    sessionStorage.setItem('adm_sementara_token', kode);
+    tampilPesan('Berhasil! Membuka lembar input...', 'ok');
+    setTimeout(() => { window.location.replace('../'); }, 400);
+  }catch(e){
+    // Gagal = BERHENTI di sini. Tanpa retry otomatis apa pun.
+    tampilPesan(pesanError(e), 'error');
+    btn.disabled = false; btn.textContent = 'Masuk';
+  }
+}
+
+btn.onclick = () => masuk(inp.value);
+inp.addEventListener('keydown', (e) => { if(e.key === 'Enter') masuk(inp.value); });
+
+const kodeUrl = new URLSearchParams(window.location.search).get('akses');
+if(kodeUrl && !autoDicoba){
+  autoDicoba = true;
+  inp.value = kodeUrl.toUpperCase();
+  masuk(kodeUrl);
+}
+
+});
+</script>
+</body>
+</html>
