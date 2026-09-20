@@ -78,6 +78,7 @@ function esc(s){
 }
 
 // ===== INDIKATOR LOADING: blokir seluruh sentuhan saat proses berjalan =====
+let busyFailsafeTimer = null;
 function mulaiBusy(teks){
   let ov = document.getElementById('busyOverlay');
   if(!ov){
@@ -90,8 +91,16 @@ function mulaiBusy(teks){
   ov.querySelector('.busy-text').textContent = teks || 'Memproses…';
   ov.hidden = false;
   document.body.classList.add('busy');
+  // Jaring pengaman: bila proses menggantung (jaringan mati, promise tak kunjung
+  // selesai), overlay dilepas otomatis agar aplikasi tidak terkunci selamanya.
+  clearTimeout(busyFailsafeTimer);
+  busyFailsafeTimer = setTimeout(() => {
+    console.warn('Overlay loading melebihi 45 detik — dilepas otomatis.');
+    selesaiBusy();
+  }, 45000);
 }
 function selesaiBusy(){
+  clearTimeout(busyFailsafeTimer);
   const ov = document.getElementById('busyOverlay');
   if(ov) ov.hidden = true;
   document.body.classList.remove('busy');
@@ -305,11 +314,13 @@ function renderLogin(kodeQr){
         if(!isEmail){
           if(!p){ selesaiBusy(); return showMsg(msgArea, 'Username membutuhkan password.'); }
           await auth.signInWithEmailAndPassword(v.toLowerCase() + EMAIL_DOMAIN, p);
+          selesaiBusy(); // sukses: listener auth akan menggambar ulang halaman
           return;
         }
         // (3) Email -> ADM Utama
         if(!p){ selesaiBusy(); return showMsg(msgArea, 'Email membutuhkan password.'); }
         await auth.signInWithEmailAndPassword(v.toLowerCase(), p);
+        selesaiBusy(); // sukses: listener auth akan menggambar ulang halaman
       }catch(e){
         selesaiBusy();
         showMsg(msgArea, pesanErrorAuth(e), 'error', 15000);
