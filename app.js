@@ -398,7 +398,7 @@ function renderInputSheet(){
       <datalist id="addrList"></datalist>
     </div>
     <div class="card">
-      <h2>Daftar Tamu <span class="muted" id="jmlTamu"></span></h2>
+      <h2>Daftar Tamu <span class="muted" id="jmlTamu"></span><button class="btn-outline btn-sm" id="btnEkspor" type="button">⬇ Export ke Excel</button></h2>
       <div class="sheet-wrap">
         <table class="sheet">
           <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Sumbangan</th><th class="tcol-status">Status</th></tr></thead>
@@ -416,6 +416,8 @@ function renderInputSheet(){
     </div>
   `;
 
+  const btnEkspor = document.getElementById('btnEkspor');
+  if(btnEkspor) btnEkspor.onclick = () => eksporCsv('daftar-tamu');
   pasangFormCepat();
   pasangLanggananTabel(targetUserUid());
   pasangTimerSesi();
@@ -507,11 +509,13 @@ function pasangLanggananTabel(uid){
 }
 
 let addrSuggestions = [];
+let dataTamuTerkini = []; // salinan data yang sedang tampil — sumber ekspor CSV
 function renderTabel(snap){
   const body = document.getElementById('sheetBody');
   if(!body) return;
   let total = 0, sudah = 0, i = 0;
   addrSuggestions = [];
+  dataTamuTerkini = [];
   let rows = '';
   snap.forEach(doc => {
     const t = doc.data();
@@ -519,6 +523,7 @@ function renderTabel(snap){
     total += Number(t.rp)||0;
     if(t.status === 'sudah') sudah++;
     if(t.alamat && addrSuggestions.length < 60) addrSuggestions.push(t.alamat);
+    dataTamuTerkini.push({nama: t.nama, alamat: t.alamat||'', rp: Number(t.rp)||0, status: t.status==='sudah' ? 'sudah' : 'belum'});
     const pending = doc.metadata.hasPendingWrites ? ' baru' : '';
     // Sel tampil sebagai teks pola; klik di mana pun pada baris membuka menu
     rows += `
@@ -585,6 +590,27 @@ function bukaDialogEditBaris(tr, ref){
       await ref.update(nilai);
     }
   });
+}
+
+// ================= EKSPOR CSV (Excel-compatible) =================
+function eksporCsv(namaBerkas){
+  if(!dataTamuTerkini.length){ alert('Belum ada data tamu untuk diekspor.'); return; }
+  const kutip = (v) => '"' + String(v==null ? '' : v).replace(/"/g,'""') + '"';
+  const baris = [['No','Nama','Alamat','Sumbangan (Rp)','Status'].map(kutip).join(';')];
+  dataTamuTerkini.forEach((t, i) => {
+    baris.push([i+1, t.nama, t.alamat, t.rp, t.status==='sudah' ? 'Sudah' : 'Belum'].map(kutip).join(';'));
+  });
+  const total = dataTamuTerkini.reduce((s, t) => s + t.rp, 0);
+  baris.push(['', 'TOTAL', '', total, dataTamuTerkini.length + ' tamu'].map(kutip).join(';'));
+  // BOM \uFEFF agar Excel membaca file sebagai UTF-8 (nama dengan karakter khusus aman)
+  const blob = new Blob(['\uFEFF' + baris.join('\r\n')], {type: 'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (namaBerkas || 'daftar-tamu') + '-' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
 }
 
 function pasangTimerSesi(){
@@ -748,7 +774,7 @@ async function bukaLembarAkun(userId){
     </div>
     <div class="card" id="qrArea" style="display:none;"></div>
     <div class="card">
-      <h2>Lembar Tamu</h2>
+      <h2>Lembar Tamu <button class="btn-outline btn-sm" id="btnEkspor" type="button">⬇ Export ke Excel</button></h2>
       <div class="sheet-wrap">
         <table class="sheet">
           <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Sumbangan</th><th class="tcol-status">Status</th><th class="tcol-aksi">Aksi</th></tr></thead>
@@ -764,6 +790,8 @@ async function bukaLembarAkun(userId){
   `;
 
   document.getElementById('backBtn').onclick = renderAdmDashboard;
+  const btnEksporAkun = document.getElementById('btnEkspor');
+  if(btnEksporAkun) btnEksporAkun.onclick = () => eksporCsv('tamu-' + d.username);
   document.getElementById('genQrBtn').onclick = async () => {
     mulaiBusy('Membuat QR petugas…');
     try{ await buatQrToken(userId, d.username); }
