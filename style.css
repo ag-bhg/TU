@@ -83,9 +83,8 @@ table.sheet th{
   padding:8px 6px;font-size:10px;text-transform:uppercase;letter-spacing:.5px;
 }
 table.sheet td{padding:0;border-bottom:1px solid var(--paper-2);border-right:1px solid #f0ebdd;height:38px;vertical-align:middle;}
-table.sheet tr:last-child td{border-bottom:none;}
-table.sheet td input{width:100%;border:none;background:transparent;padding:8px 6px;font-size:14px;border-radius:0;}
-table.sheet td input:focus{outline:2px solid var(--gold);outline-offset:-2px;background:#fff8e6;}
+table.sheet tr:last-child td{border-bottom:none;}  table.sheet tbody tr{cursor:context-menu;}
+  table.sheet tbody tr:active td{background:#faf5e6;}
 table.sheet td.aksi{white-space:nowrap;text-align:center;padding:0 4px;}
 table.sheet td.aksi button{background:none;border:none;font-size:16px;padding:4px 6px;}
 .sheet-total{padding:8px 6px;background:var(--paper-2);font-size:13px;font-weight:600;border-top:2px solid var(--line);}
@@ -93,6 +92,61 @@ table.sheet td.aksi button{background:none;border:none;font-size:16px;padding:4p
 .tcol-status{width:96px;}
 .tcol-aksi{width:84px;}
 tr.baru td{background:#fdf8ea;}
+
+/* ===== LOADING OVERLAY: blokir sentuhan saat proses ===== */
+.busy-overlay{
+  position:fixed;inset:0;z-index:200;
+  background:rgba(31,42,60,0.35);
+  display:flex;align-items:center;justify-content:center;
+}
+.busy-overlay[hidden]{display:none;}
+.busy-box{
+  background:var(--white);border:1px solid var(--line);border-radius:10px;
+  padding:18px 26px;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,0.25);
+}
+.busy-spinner{
+  width:34px;height:34px;margin:0 auto 10px;
+  border:4px solid var(--paper-2);border-top-color:var(--maroon);
+  border-radius:50%;animation:busy-putar 0.8s linear infinite;
+}
+@keyframes busy-putar{to{transform:rotate(360deg);}}
+.busy-text{font-size:13px;color:var(--ink-2);font-weight:600;}
+body.busy{pointer-events:none;}
+body.busy .busy-overlay{pointer-events:auto;}
+
+/* ===== MENU KONTEKS ala klik-kanan Windows (teks saja) ===== */
+.ctx-menu{
+  position:fixed;z-index:300;
+  background:var(--white);border:1px solid var(--line);border-radius:6px;
+  box-shadow:0 6px 20px rgba(31,42,60,0.18);
+  min-width:180px;padding:4px 0;
+  font-size:14px;
+}
+.ctx-item{
+  display:block;width:100%;text-align:left;
+  background:none;border:none;border-radius:0;
+  padding:10px 16px;font-size:14px;font-weight:400;color:var(--text);
+  cursor:pointer;
+}
+.ctx-item:hover{background:var(--paper-2);}
+.ctx-item.bahaya{color:var(--maroon);}
+.ctx-sep{height:1px;background:var(--paper-2);margin:4px 0;}
+
+/* ===== DIALOG EDIT BARIS ===== */
+.edit-dialog{
+  position:fixed;inset:0;z-index:250;
+  background:rgba(31,42,60,0.4);
+  display:flex;align-items:center;justify-content:center;padding:16px;
+}
+.edit-dialog[hidden]{display:none;}
+.edit-box{
+  background:var(--white);border:1px solid var(--line);border-radius:10px;
+  padding:18px;width:100%;max-width:380px;box-shadow:0 8px 30px rgba(0,0,0,0.25);
+}
+.edit-box h3{margin:0 0 12px;font-size:16px;color:var(--ink-2);}
+.edit-box label{margin-top:10px;}
+.edit-actions{display:flex;gap:8px;margin-top:16px;}
+.edit-actions button{flex:1;}
 .qr-box{display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px 0;}
 .token-code{font-family:monospace;font-size:18px;letter-spacing:3px;background:var(--paper-2);padding:6px 12px;border-radius:4px;}
 @media(max-width:600px){
