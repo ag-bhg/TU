@@ -634,7 +634,14 @@ async function loadLogList(){
 async function loadAkunUserList(){
   const listEl = document.getElementById('auList');
   const countEl = document.getElementById('auCount');
-  const snap = await db.collection('akun_user').orderBy('dibuat_tanggal','desc').get();
+  let snap;
+  try{
+    snap = await db.collection('akun_user').orderBy('dibuat_tanggal','desc').get();
+  }catch(e){
+    listEl.innerHTML = '<p class="empty">Gagal memuat daftar akun: ' + (e.message||e) + '</p>';
+    console.error('Gagal memuat daftar akun:', e);
+    return;
+  }
   countEl.textContent = `(${snap.size} / 300)`;
   if(snap.empty){
     listEl.innerHTML = '<p class="empty">Belum ada akun user.</p>';
@@ -792,9 +799,19 @@ async function buatQrToken(userId){
 
 async function loadTokenList(userId){
   const el = document.getElementById('tokenList');
-  const snap = await db.collection('qr_tokens')
-    .where('terikat_ke_userId','==',userId)
-    .orderBy('dibuat_at','desc').limit(20).get();
+  let snap;
+  try{
+    snap = await db.collection('qr_tokens')
+      .where('terikat_ke_userId','==',userId)
+      .orderBy('dibuat_at','desc').limit(20).get();
+  }catch(e){
+    // Query ini butuh composite index Firestore (terikat_ke_userId + dibuat_at).
+    // Tanpa try/catch, tombol "Kelola" macet di "Memuat..." selamanya.
+    el.innerHTML = '<p class="empty">Gagal memuat daftar QR: ' + (e.message||e) +
+      '</p><p class="muted">Bila pesannya menyebut "The query requires an index", buka tautan index yang muncul di Console browser (F12) sekali saja — Firestore akan membuatkan index-nya otomatis.</p>';
+    console.error('Gagal memuat daftar QR:', e);
+    return;
+  }
   if(snap.empty){
     el.innerHTML = '<p class="empty">Belum ada QR yang dibuat untuk akun ini.</p>';
     return;
@@ -884,7 +901,10 @@ window.hapusTamuAdm = hapusTamuAdm;
 
 // ================= AKUN USER =================
 async function renderAkunUser(){
-  await settleKuotaJikaAda(currentUser.uid);
+  // Jika settle gagal (mis. izin/jaringan), jangan biarkan seluruh halaman
+  // Akun User blank — lanjutkan render dengan data yang ada.
+  try{ await settleKuotaJikaAda(currentUser.uid); }
+  catch(e){ console.warn('Settle kuota gagal:', e.message); }
   const userDoc = await db.collection('akun_user').doc(currentUser.uid).get();
   currentUserData = userDoc.data();
 
@@ -1178,15 +1198,25 @@ function simpanAlamatKeCache(){
   try{ localStorage.setItem(alamatCacheKey(), JSON.stringify(daftarAlamat.slice(-100))); }catch(e){}
 }
 
+let sedangSinkron = false; // guard anti sinkron ganda
+
 async function sinkronKeDatabase(manual){
   const statusEl = document.getElementById('syncStatus');
   if(inputQueue.length === 0){
     if(manual && statusEl) statusEl.textContent = 'Tidak ada data baru.';
     return;
   }
+  // Timer 60 detik, auto-sync saat 15 data, tombol "Update Database", dan
+  // beforeunload bisa nyaris bersamaan — tanpa guard ini, data yang sama
+  // bisa ter-commit dua kali (tamu duplikat di database).
+  if(sedangSinkron) return;
+  sedangSinkron = true;
   if(statusEl) statusEl.textContent = 'Menyinkron...';
   const userId = admSementaraSession.terikat_ke_userId;
-  const batchItems = inputQueue.slice(0, 400); // batas aman per batch Firestore
+  // Tiap item = 2 operasi tulis (tamu + log), dan Firestore membatasi 500
+  // operasi per batch commit. Sebelumnya slice(0,400) = 800 operasi -> batch
+  // SELALU ditolak dan semua data stuck "Lokal", tak pernah masuk database.
+  const batchItems = inputQueue.slice(0, 249);
   try{
     const batch = db.batch();
     batchItems.forEach(item => {
@@ -1221,6 +1251,8 @@ async function sinkronKeDatabase(manual){
   }catch(e){
     if(statusEl) statusEl.textContent = 'Gagal sinkron: ' + e.message;
     console.error('Sinkron gagal:', e);
+  }finally{
+    sedangSinkron = false;
   }
 }
 
