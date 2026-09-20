@@ -112,6 +112,9 @@ function tutupMenuKonteks(){
   if(ctxMenuEl){ ctxMenuEl.remove(); ctxMenuEl = null; }
 }
 document.addEventListener('click', (e) => {
+  // Klik di luar menu menutupnya. Handler pembuka menu memanggil stopPropagation(),
+  // jadi ketukan yang MEMBUKA menu tidak pernah sampai ke sini — tanpa itu menu
+  // akan terbuka lalu langsung tertutup oleh ketukan yang sama (tampak tidak respons).
   if(ctxMenuEl && !ctxMenuEl.contains(e.target)) tutupMenuKonteks();
 });
 window.addEventListener('scroll', tutupMenuKonteks, true);
@@ -559,6 +562,7 @@ function renderTabel(snap){
   // Klik/tap baris -> menu konteks (Edit / Hapus / Ganti status)
   body.querySelectorAll('tr.baris-tamu').forEach(tr => {
     tr.addEventListener('click', function(e){
+      e.stopPropagation(); // jangan biarkan klik pembuka menutup menu yang baru dibuka
       const rect = this.getBoundingClientRect();
       tampilkanMenuKonteks(e.clientX || rect.left, e.clientY || rect.top, menuBarisTamu(this));
     });
@@ -736,6 +740,7 @@ async function muatDaftarAkun(){
 
   body.querySelectorAll('tr.baris-akun').forEach(tr => {
     tr.addEventListener('click', function(e){
+      e.stopPropagation(); // jangan biarkan klik pembuka menutup menu yang baru dibuka
       const rect = this.getBoundingClientRect();
       tampilkanMenuKonteks(e.clientX || rect.left, e.clientY || rect.top, [
         {label: 'Buka lembar tamu…', aksi: () => bukaLembarAkun(this.dataset.id)},
