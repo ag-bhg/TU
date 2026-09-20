@@ -95,6 +95,7 @@ async function masuk(nilaiKode){
     const snap = await db.collection('qr_tokens').doc(kode).get();
     if(!snap.exists) throw new Error('Kode akses tidak ditemukan. Periksa penulisan kode (8 karakter).');
     const d = snap.data();
+    if(!d.terikat_ke_userId) throw new Error('QR ini tidak terhubung ke lembar tamu mana pun. Minta ADM Utama membuat QR baru.');
     // Satu langkah: simpan sesi lalu langsung masuk aplikasi utama.
     sessionStorage.setItem('adm_sementara_token', kode);
     sessionStorage.setItem('adm_sementara_uid', d.terikat_ke_userId);
