@@ -91,6 +91,7 @@ table.sheet td.aksi button{background:none;border:none;font-size:16px;padding:4p
 .tcol-no{width:34px;text-align:center;color:var(--muted);font-size:12px;}
 .tcol-status{width:96px;}
 .tcol-aksi{width:84px;}
+.tcol-aksi-hidden{width:12px;padding:0 !important;}
 tr.baru td{background:#fdf8ea;}
 
 /* ===== LOADING OVERLAY: blokir sentuhan saat proses ===== */
@@ -150,6 +151,7 @@ body.busy .busy-overlay{pointer-events:auto;}
 .qr-box{display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px 0;}
 .token-code{font-family:monospace;font-size:18px;letter-spacing:3px;background:var(--paper-2);padding:6px 12px;border-radius:4px;}
 @media(max-width:600px){
+  .tcol-aksi-hidden{display:none;}
   .quick-line{flex-wrap:wrap;}
   #qNama{flex:100%;}
   #qAlamat{flex:1;}

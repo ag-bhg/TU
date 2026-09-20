@@ -547,6 +547,7 @@ function renderTabel(snap){
         <td>${esc(t.alamat||'')}</td>
         <td style="text-align:right;padding-right:8px;">${t.rp ? fmtRp(t.rp) : '—'}</td>
         <td class="tcol-status" style="text-align:center;"><span class="badge ${t.status==='sudah'?'aktif':'belum'}">${t.status==='sudah'?'Sudah':'Belum'}</span></td>
+        <td class="tcol-aksi-hidden"></td>
       </tr>`;
   });
   body.innerHTML = rows || '<tr><td colspan="5"><p class="empty">Belum ada tamu. Ketik di form atas — tekan Enter untuk tambah cepat.</p></td></tr>';
@@ -650,6 +651,7 @@ function pasangTimerSesi(){
 // ================= DASHBOARD ADM UTAMA =================
 async function renderAdmDashboard(){
   bersihkanLogKedaluwarsa();
+  app.innerHTML = '<div class="card"><p class="empty">Memuat dasbor…</p></div>';
 
   app.innerHTML = `
     <div class="card">
@@ -775,8 +777,17 @@ async function muatDaftarAkun(){
 }
 
 async function bukaLembarAkun(userId){
-  const doc = await db.collection('akun_user').doc(userId).get();
-  const d = doc.data();
+  let d;
+  try{
+    const doc = await db.collection('akun_user').doc(userId).get();
+    if(!doc.exists) throw new Error('Data akun tidak ditemukan.');
+    d = doc.data();
+  }catch(e){
+    app.innerHTML = '<div class="card"><p class="empty">Gagal membuka lembar akun: ' + esc(e.message||e) + '</p><button class="btn-outline btn-sm" id="kembaliBtn">&larr; Kembali</button></div>';
+    const kb = document.getElementById('kembaliBtn');
+    if(kb) kb.onclick = () => renderAdmDashboard();
+    return;
+  }
 
   app.innerHTML = `
     <button class="btn-outline btn-sm" id="backBtn">&larr; Kembali ke daftar akun</button>
@@ -793,9 +804,9 @@ async function bukaLembarAkun(userId){
       <h2>Lembar Tamu <button class="btn-outline btn-sm" id="btnEkspor" type="button">⬇ Export ke Excel</button></h2>
       <div class="sheet-wrap">
         <table class="sheet">
-          <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Sumbangan</th><th class="tcol-status">Status</th><th class="tcol-aksi">Aksi</th></tr></thead>
+          <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Sumbangan</th><th class="tcol-status">Status</th><th class="tcol-aksi-hidden"></th></tr></thead>
           <tbody id="sheetBody"><tr><td colspan="6"><p class="empty">Memuat…</p></td></tr></tbody>
-          <tfoot><tr class="sheet-total"><td colspan="3">TOTAL</td><td style="text-align:right;" id="totalRp">Rp 0</td><td colspan="2" id="totalInfo" class="muted" style="font-weight:400;"></td></tr></tfoot>
+          <tfoot><tr class="sheet-total"><td colspan="3">TOTAL</td><td style="text-align:right;" id="totalRp">Rp 0</td><td id="totalInfo" class="muted" style="font-weight:400;"></td><td class="tcol-aksi-hidden"></td></tr></tfoot>
         </table>
       </div>
     </div>
@@ -809,9 +820,8 @@ async function bukaLembarAkun(userId){
   const btnEksporAkun = document.getElementById('btnEkspor');
   if(btnEksporAkun) btnEksporAkun.onclick = () => eksporCsv('tamu-' + d.username);
   document.getElementById('genQrBtn').onclick = async () => {
-    mulaiBusy('Membuat QR petugas…');
-    try{ await buatQrToken(userId, d.username); }
-    finally{ selesaiBusy(); }
+    // buatQrToken sudah mengelola busy sendiri (try/catch/finally di dalamnya)
+    await buatQrToken(userId, d.username);
   };
   document.getElementById('addKuotaBtn').onclick = async () => {
     mulaiBusy('Menambah kuota…');
@@ -836,10 +846,12 @@ async function bukaLembarAkun(userId){
 }
 
 async function buatQrToken(userId, username){
+  // prompt() sinkron — overlay dibuka SETELAHnya, bukan sebelum, agar layar
+  // tidak terkunci sambil dialog pertanyaan masih tampil.
+  const namaPetugas = prompt('Nama petugas (untuk catatan):');
+  if(namaPetugas === null || !namaPetugas.trim()) return;
   mulaiBusy('Membuat QR petugas…');
   try{
-    const namaPetugas = prompt('Nama petugas (untuk catatan):');
-    if(namaPetugas === null || !namaPetugas.trim()) return;
     const tokenId = randomToken(8);
     const expiredAt = new Date(Date.now() + 36*60*60*1000);
     await db.collection('qr_tokens').doc(tokenId).set({
@@ -871,6 +883,8 @@ async function buatQrToken(userId, username){
   }catch(e){
     const el = document.getElementById('detailMsg');
     if(el) showMsg(el, 'Gagal membuat QR: ' + (e.message||e));
+  }finally{
+    selesaiBusy(); // selalu dilepas — sukses, gagal, maupun dibatalkan
   }
 }
 
@@ -917,12 +931,12 @@ async function muatLog(){
     return;
   }
   if(snap.empty){ el.innerHTML = '<p class="empty">Belum ada aktivitas.</p>'; return; }
-  let rows = '';
+  let rows = ''; let no = 0;
   snap.forEach(doc => {
-    const d = doc.data();
-    rows += '<tr><td>' + fmtWaktu(d.waktu) + '</td><td><strong>' + esc(d.nama_petugas||'-') + '</strong></td><td>' + esc(d.aksi||'tambah') + ' — ' + esc(d.nama_tamu||'') + '</td></tr>';
+    const d = doc.data(); no++;
+    rows += '<tr><td class="tcol-no">' + no + '</td><td>' + fmtWaktu(d.waktu) + '</td><td><strong>' + esc(d.nama_petugas||'-') + '</strong></td><td>' + esc(d.aksi||'tambah') + ' — ' + esc(d.nama_tamu||'') + '</td></tr>';
   });
-  el.innerHTML = '<div class="sheet-wrap"><table class="sheet" style="min-width:420px;"><thead><tr><th>Waktu</th><th>Petugas</th><th>Aksi</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  el.innerHTML = '<div class="sheet-wrap"><table class="sheet" style="min-width:420px;">          <thead><tr><th class="tcol-no">No</th><th>Waktu</th><th>Petugas</th><th>Aksi</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 
 let qrCodeLibPromise = null;
