@@ -729,6 +729,17 @@ function eksporCsv(namaBerkas){
 // Tanpa klaim token, tanpa cek status/kedaluwarsa — satu panggilan baca lalu masuk.
 const qrStore = db.collection('qr_tokens');
 
+// Tautan QR SELALU menunjuk halaman petugas /Adms — bukan halaman utama. Dibangun
+// dari window.location.origin + dasar repo, jadi tetap benar bila situs pindah
+// (mis. custom domain) tanpa perlu mengubah kode.
+function urlTautanQr(tokenId, uidPemilik, namaPetugas){
+  const dasar = (window.location.origin + window.location.pathname).replace(/\/[^\/]*\.html?$/, '').replace(/\/$/, '');
+  let t = dasar + '/Adms/?akses=' + encodeURIComponent(tokenId);
+  if(uidPemilik) t += '&u=' + encodeURIComponent(uidPemilik);
+  if(namaPetugas) t += '&n=' + encodeURIComponent(namaPetugas);
+  return t;
+}
+
 function hentikanPengawasToken(){
   // Sisa kompatibilitas — pengawas sudah tidak dipakai pada alur satu langkah.
 }
@@ -974,7 +985,7 @@ async function buatQrToken(userId, username){
     await muatLibraryQrCode();
     const qrArea = document.getElementById('qrArea');
     qrArea.style.display = 'block';
-    const linkUrl = window.location.origin + window.location.pathname + '?akses=' + tokenId + '&u=' + userId + '&n=' + encodeURIComponent(namaPetugas.trim());
+    const linkUrl = urlTautanQr(tokenId, userId, namaPetugas.trim());
     qrArea.innerHTML = `
       <h2>QR Petugas — ${esc(namaPetugas)}</h2>
       <div class="qr-box">
@@ -1060,7 +1071,7 @@ async function tampilkanQrUlang(tokenId, namaPetugas, userIdPemilik){
     const qrArea = document.getElementById('qrArea');
     if(!qrArea) return;
     qrArea.style.display = 'block';
-    const linkUrl = window.location.origin + window.location.pathname + '?akses=' + tokenId + (userIdPemilik ? '&u=' + userIdPemilik : '') + '&n=' + encodeURIComponent(namaPetugas||'');
+    const linkUrl = urlTautanQr(tokenId, userIdPemilik, namaPetugas);
     qrArea.innerHTML = `
       <h2>QR Petugas — ${esc(namaPetugas||'(tanpa nama)')}</h2>
       <div class="qr-box">
