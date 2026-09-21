@@ -29,9 +29,8 @@ const EMAIL_DOMAIN = "@tamu-undangan.local";
 
 // ================= STATE =================
 let currentUser = null;
-let currentRole = null;      // 'adm_utama' | 'akun_user' | 'adm_sementara'
+let currentRole = null;      // 'adm_utama' | 'akun_user'
 let currentUserData = null;
-let admSession = null;
 let timerInterval = null;
 let onSnapshotUnsub = null;
 let cooldownSampai = 0;       // jeda lokal hanya untuk blokir too-many-requests (ms epoch)
@@ -43,17 +42,6 @@ const whoAmI = document.getElementById('whoAmI');
 document.getElementById('btnLogout').onclick = async () => {
   clearInterval(timerInterval);
   if(onSnapshotUnsub){ onSnapshotUnsub(); onSnapshotUnsub = null; }
-  hentikanPengawasToken();
-  // Keluar = hapus semua jejak sesi petugas di perangkat
-  sessionStorage.removeItem('adm_sementara_token');
-  sessionStorage.removeItem('adm_sementara_uid');
-  sessionStorage.removeItem('adm_sementara_nama');
-  try{
-    localStorage.removeItem('adm_sementara_token');
-    localStorage.removeItem('adm_sementara_uid');
-    localStorage.removeItem('adm_sementara_nama');
-  }catch(e){}
-  admSession = null;
   lembarDilihatUid = null;
   await auth.signOut();
 };
@@ -209,70 +197,38 @@ function pesanErrorAuth(e){
   return (e && e.message) ? e.message : 'Terjadi kesalahan.';
 }
 
-// ===== SESI PETUGAS TANPA LOGIN =====
-// Sesi disimpan di sessionStorage dengan cadangan localStorage: apa pun yang
-// terjadi (reload, browser dimatikan, koneksi putus), perangkat dengan login
-// anonim yang masih hidup langsung kembali ke lembar input tanpa login ulang.
+// ===== PREVIEW LEMBAR (ADM Utama membuka tautan QR) =====
+// Sesi petugas (login anonim, penyimpanan sesi, profil-otomatis) kini
+// sepenuhnya ditangani /Adms/app.js — halaman ringan khusus petugas.
 let qrSedangProses = false;   // pengaman render ulang listener saat proses QR berjalan
 let lembarDilihatUid = null;  // diisi saat ADM Utama membuka lembar akun lain
 
-function simpanSesiPetugas(token, uid, nama){
-  sessionStorage.setItem('adm_sementara_token', token);
-  sessionStorage.setItem('adm_sementara_uid', uid);
-  if(nama) sessionStorage.setItem('adm_sementara_nama', nama);
-  try{
-    localStorage.setItem('adm_sementara_token', token);
-    localStorage.setItem('adm_sementara_uid', uid);
-    if(nama) localStorage.setItem('adm_sementara_nama', nama);
-  }catch(e){}
-}
 function bersihkanUrlQr(){
   try{ window.history.replaceState(null, '', window.location.pathname); }catch(e){}
-}
-
-// Profil pemilik lembar dibuat OTOMATIS bila belum ada — QR tidak pernah
-// menemui "akun belum terdaftar". Sudah ada? satu baca, tanpa perubahan.
-let profilDijamin = {};
-function ensureProfilPemilik(uid){
-  if(!uid) return Promise.resolve();
-  if(!profilDijamin[uid]){
-    const ref = db.collection('akun_user').doc(uid);
-    profilDijamin[uid] = ref.get().then(snap => {
-      if(snap.exists) return;
-      return ref.set({
-        username: 'lembar-' + uid.slice(0,6),
-        dibuat_tanggal: firebase.firestore.FieldValue.serverTimestamp(),
-        kuota_total: 0,
-        kuota_terpakai: 0,
-        dibuat_oleh: 'qr-otomatis',
-        dibuat_via: 'qr_scan'
-      }, {merge:true}).catch(()=>{}); // profil best-effort; yang menentukan rules Firestore
-    }).catch(()=>{});
-  }
-  return profilDijamin[uid];
 }
 
 // ================= ROUTING / INIT =================
 auth.onAuthStateChanged(async (user) => {
   clearInterval(timerInterval);
   if(onSnapshotUnsub){ onSnapshotUnsub(); onSnapshotUnsub = null; }
-  hentikanPengawasToken();
 
-  // QR = tiket masuk: kondisi APA PUN langsung dibawakan ke lembar input,
-  // tanpa satu pun langkah login manual.
-  // - Perangkat tanpa sesi -> login anonim otomatis + sesi petugas dibuat
-  // - Profil pemilik lembar belum ada? dibuat otomatis (ensureProfilPemilik)
-  // - QR lama tanpa u= -> pemilik dibaca SEKALI dari DB, tetap tanpa verifikasi
-  // - Akun utama yang membuka tautan QR -> lembar tamu pemilik langsung terbuka
+  // Halaman utama TIDAK LAGI menangani sesi petugas (ADM Sementara) sendiri —
+  // itu sepenuhnya tugas /Adms/ (halaman ringan, khusus petugas, tanpa memuat
+  // kode dasbor ADM Utama). Halaman ini hanya menangani ?akses= untuk kasus
+  // ADM Utama yang sedang login membuka tautan QR (preview lembar tamu).
   const params = new URLSearchParams(window.location.search);
   const aksesUrl = params.get('akses');
   if(aksesUrl){
-    masukQrOtomatis(aksesUrl, params.get('u') || '', params.get('n') || '', user);
+    if(user && !user.isAnonymous){
+      masukQrOtomatis(aksesUrl, params.get('u') || '', params.get('n') || '', user);
+    }else{
+      window.location.replace('Adms/' + window.location.search);
+    }
     return;
   }
 
   if(!user){
-    currentUser = null; currentRole = null; currentUserData = null; admSession = null;
+    currentUser = null; currentRole = null; currentUserData = null;
     appHeader.style.display = 'none';
     renderLogin();
     return;
@@ -280,32 +236,9 @@ auth.onAuthStateChanged(async (user) => {
   currentUser = user;
 
   if(user.isAnonymous){
-    // Sesi petugas dipulihkan dari penyimpanan perangkat — tanpa cek DB.
-    // Reload, browser dimatikan, koneksi putus-nyambung: tetap langsung masuk.
-    const savedToken = sessionStorage.getItem('adm_sementara_token') || localStorage.getItem('adm_sementara_token');
-    const savedUid = sessionStorage.getItem('adm_sementara_uid') || localStorage.getItem('adm_sementara_uid');
-    if(savedToken && savedUid){
-      const savedNama = sessionStorage.getItem('adm_sementara_nama') || localStorage.getItem('adm_sementara_nama') || '';
-      simpanSesiPetugas(savedToken, savedUid, savedNama);
-      ensureProfilPemilik(savedUid); // best-effort, tidak menahan render
-      // Pastikan dokumen akses sesi tetap ada juga saat pemulihan sesi
-      // (bila rules menuntutnya untuk menulis tamu).
-      try{
-        await db.collection('adm_sementara_akses').doc(user.uid).set({
-          terikat_ke_userId: savedUid,
-          token_id: savedToken,
-          expired_at: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 36*60*60*1000))
-        });
-      }catch(e){ console.warn('Catatan akses (restore) gagal:', e.code || e.message); }
-      currentRole = 'adm_sementara';
-      admSession = {tokenId: savedToken, terikat_ke_userId: savedUid, nama_petugas: savedNama};
-      appHeader.style.display = 'flex';
-      whoAmI.textContent = 'Petugas: ' + (admSession.nama_petugas||'-');
-      renderInputSheet();
-      return;
-    }
-    appHeader.style.display = 'none';
-    renderLogin();
+    // Sesi anonim (petugas) tersasar di halaman utama — sesi & lembarnya
+    // sepenuhnya ditangani /Adms/, jadi alihkan ke sana.
+    window.location.replace('Adms/');
     return;
   }
 
@@ -376,9 +309,11 @@ function renderLogin(){
     (async () => {
       try{
         const isEmail = v.includes('@');
-        // (1) Kode QR: huruf-angka polos tanpa password -> akses petugas
+        // (1) Kode QR: huruf-angka polos tanpa password -> alihkan ke halaman
+        // petugas /Adms/ (ringan, khusus petugas — bukan diproses di sini)
         if(!isEmail && !p && /^[A-Z0-9]+$/.test(v)){
-          await masukQrOtomatis(v, '', '', null, true); // baca pemilik sekali, langsung masuk
+          selesaiBusy();
+          window.location.href = 'Adms/?akses=' + encodeURIComponent(v);
           return;
         }
         // (2) Username polos -> domain internal
@@ -412,17 +347,11 @@ function renderLogin(){
   // kegagalan berputar tanpa henti sampai Firebase memblokir perangkat.
 }
 
-// ===== MASUK QR OTOMATIS — TIDAK ADA LANGKAH LOGIN APA PUN =====
-// Scan QR (?akses=KODE&u=UID) -> langsung lembar input. Di kondisi APA PUN:
-// - Perangkat baru/tanpa sesi: login anonim otomatis (satu panggilan, syarat
-//   security rules agar boleh menulis) + sesi petugas dibuat.
-// - Sudah punya sesi anonim: dipakai ulang, tanpa login ulang.
-// - Akun utama membuka tautan QR: langsung dibawa ke lembar tamu pemilik
-//   (lembar baca-saja bagi ADM) — sesi utama TIDAK diganggu.
-// - QR lama tanpa u= : pemilik dibaca SEKALI dari qr_tokens, tanpa verifikasi
-//   status/kedaluwarsa/assigned_uid. QR dianggap tiket fisik yang sah.
-// - Profil pemilik lembar belum ada -> dibuat otomatis (ensureProfilPemilik).
-function masukQrOtomatis(token, uidPemilik, namaPetugas, userSaatIni, dariInputKode){
+// ===== MASUK QR OTOMATIS (HALAMAN UTAMA) — HANYA UNTUK ADM UTAMA =====
+// Sesi petugas (anonim) sepenuhnya ditangani /Adms/ — fungsi ini hanya
+// dipanggil saat ADM Utama yang sedang login membuka tautan QR, untuk
+// menampilkan lembar tamu pemilik (mode preview, sesi utama tidak diganggu).
+function masukQrOtomatis(token, uidPemilik, namaPetugas, userSaatIni){
   if(qrSedangProses) return; // render ulang listener di tengah proses: abaikan
   qrSedangProses = true;
   const selesai = () => { qrSedangProses = false; selesaiBusy(); };
@@ -432,8 +361,7 @@ function masukQrOtomatis(token, uidPemilik, namaPetugas, userSaatIni, dariInputK
       let pemilik = uidPemilik;
       let nama = namaPetugas;
       if(!pemilik){
-        // QR lama tanpa u=: baca pemilik SEKALI dari DB. Itu satu-satunya
-        // panggilan — tanpa cek status/kedaluwarsa/assigned_uid.
+        // QR lama tanpa u=: baca pemilik SEKALI dari DB.
         const snap = await qrStore.doc(token).get();
         if(!snap.exists) throw new Error('Kode akses tidak ditemukan. Minta ADM Utama menampilkan ulang QR atau membuat yang baru.');
         const d = snap.data();
@@ -442,49 +370,15 @@ function masukQrOtomatis(token, uidPemilik, namaPetugas, userSaatIni, dariInputK
       }
       if(!pemilik) throw new Error('QR ini tidak terhubung ke lembar tamu mana pun. Buat QR baru dari dashboard ADM Utama.');
 
-      if(userSaatIni && !userSaatIni.isAnonymous){
-        // Akun utama buka tautan QR -> tampilkan lembar tamu pemilik, sesi utama aman
-        selesai();
-        bersihkanUrlQr();
-        currentUser = userSaatIni;
-        lembarDilihatUid = pemilik;
-        currentRole = 'akun_user';
-        currentUserData = {username: nama ? ('Petugas: ' + nama) : 'Lembar Tamu'};
-        appHeader.style.display = 'flex';
-        whoAmI.textContent = currentUserData.username;
-        renderInputSheet();
-        return;
-      }
-
-      // Perangkat petugas: pastikan ada login anonim (otomatis, tanpa dialog)
-      let anon = auth.currentUser;
-      if(!anon || !anon.isAnonymous){
-        const cred = await auth.signInAnonymously();
-        anon = cred.user;
-      }
-      simpanSesiPetugas(token, pemilik, nama);
-      await ensureProfilPemilik(pemilik); // buat profil bila belum ada (otomatis)
-      // Tulis ulang dokumen akses sesi petugas — SYARAT umum security rules era
-      // lama: petugas anonim hanya boleh menulis ke akun_user/{uid}/tamu bila
-      // ada dokumen adm_sementara_akses/{uidAnonim} yang menunjuk pemilik.
-      // Tanpa ini rules menolak SETIUP penyimpanan tamu (permission-denied).
-      // Tanpa transaksi/verifikasi — satu set, kegagalan rules diabaikan.
-      try{
-        await db.collection('adm_sementara_akses').doc(anon.uid).set({
-          terikat_ke_userId: pemilik,
-          token_id: token,
-          expired_at: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 36*60*60*1000))
-        });
-      }catch(e){
-        console.warn('Catatan akses petugas gagal ditulis (rules):', e.code || e.message);
-      }
-      currentRole = 'adm_sementara';
-      admSession = {tokenId: token, terikat_ke_userId: pemilik, nama_petugas: nama||''};
+      // Akun utama buka tautan QR -> tampilkan lembar tamu pemilik, sesi utama aman
+      selesai();
       bersihkanUrlQr();
+      currentUser = userSaatIni;
+      lembarDilihatUid = pemilik;
+      currentRole = 'akun_user';
+      currentUserData = {username: nama ? ('Petugas: ' + nama) : 'Lembar Tamu'};
       appHeader.style.display = 'flex';
-      whoAmI.textContent = 'Petugas: ' + (nama||'-');
-      // Render langsung: listener auth akan menggambar ulang lembar yang sama
-      // begitu login anonim selesai — tidak ada layar/login yang terlihat.
+      whoAmI.textContent = currentUserData.username;
       renderInputSheet();
     }catch(e){
       bersihkanUrlQr();
@@ -492,14 +386,12 @@ function masukQrOtomatis(token, uidPemilik, namaPetugas, userSaatIni, dariInputK
       app.innerHTML = '<div class="card"><p class="empty">' + esc((e && e.message) || 'Gagal membuka QR.') + '</p><p class="muted">' + esc(pesanErrorAuth(e)) + '</p><p class="muted"><a href="' + window.location.pathname + '">Kembali ke halaman utama</a></p></div>';
       return;
     }
-    selesai();
   })();
 }
 
 // ================= LEMBAR INPUT + TABEL =================
 function targetUserUid(){
-  if(currentRole === 'adm_sementara') return admSession.terikat_ke_userId;
-  return currentUser.uid;
+  return lembarDilihatUid || currentUser.uid;
 }
 
 function renderInputSheet(){
@@ -514,9 +406,6 @@ function renderInputSheet(){
     }
     hapus.forEach(k => localStorage.removeItem(k));
   }catch(e){}
-  // Status TIDAK diinput petugas (ADM Sementara) — otomatis 'Belum';
-  // hanya Akun User/ADM Utama yang memilih status saat menambah.
-  const pilihStatus = currentRole !== 'adm_sementara';
   app.innerHTML = `
     <div class="card quick-card">
       <h2>Tambah Tamu <span class="sync-pill" id="syncPill"><span class="dot"></span><span id="syncText">menyiapkan…</span></span></h2>
@@ -524,11 +413,10 @@ function renderInputSheet(){
         <input type="text" id="qNama" placeholder="Nama tamu" autocomplete="off">
         <input type="text" id="qAlamat" placeholder="Alamat (opsional)" autocomplete="off" list="addrList">
         <input type="text" id="qRp" inputmode="numeric" placeholder="Rp" style="text-align:right;">
-        ${pilihStatus ? `
         <select id="qStatus">
           <option value="belum">Belum</option>
           <option value="sudah">Sudah</option>
-        </select>` : ''}
+        </select>
         <button class="btn-primary" id="qTambah">+ Tambah</button>
       </div>
       <datalist id="addrList"></datalist>
@@ -557,10 +445,6 @@ function renderInputSheet(){
   if(btnEkspor) btnEkspor.onclick = () => eksporCsv('daftar-tamu');
   pasangFormCepat();
   pasangLanggananTabel(targetUserUid());
-  // TANPA pengawas token: sesi petugas tidak diusir oleh siapa pun —
-  // alur satu langkah tidak mengisi assigned_uid, jadi pengawas justru
-  // akan salah menganggap sesi dicuri. Sesi berakhir hanya via Keluar.
-  pasangTimerSesi();
 }
 
 function pasangFormCepat(){
@@ -586,7 +470,7 @@ function pasangFormCepat(){
       rp: parseInt(eRp.value.replace(/[^0-9]/g,''),10) || 0,
       status: eStatus ? eStatus.value : 'belum',
       permanen: currentRole === 'akun_user',
-      dicatat_oleh: currentRole === 'adm_sementara' ? 'adm_sementara' : 'user',
+      dicatat_oleh: 'user',
       dicatat_pada: firebase.firestore.FieldValue.serverTimestamp()
     };
     // Kosongkan & fokus DULU — petugas langsung mengetik tamu berikutnya
@@ -601,7 +485,6 @@ function pasangFormCepat(){
           .update({kuota_terpakai: firebase.firestore.FieldValue.increment(1)})
           .catch(()=>{});
       }
-      if(currentRole === 'adm_sementara') tulisLog(item.nama);
     }catch(e){
       showMsg(app.querySelector('.quick-card'), 'Gagal menyimpan: ' + (e.message||e) + ' — cek koneksi lalu ulangi.', 'error', 10000);
     }finally{
@@ -614,18 +497,6 @@ function pasangFormCepat(){
     el.addEventListener('keydown', e => { if(e.key === 'Enter') tambah(); });
   });
   eNama.focus();
-}
-
-function tulisLog(namaTamu){
-  db.collection('log_adm_sementara').add({
-    token_id: admSession.tokenId,
-    nama_petugas: admSession.nama_petugas || '-',
-    terikat_ke_userId: admSession.terikat_ke_userId,
-    aksi: 'tambah',
-    nama_tamu: namaTamu,
-    waktu: firebase.firestore.FieldValue.serverTimestamp(),
-    ttl_hapus_pada: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 48*60*60*1000))
-  }).catch(()=>{});
 }
 
 function pasangLanggananTabel(uid){
@@ -772,31 +643,6 @@ function urlTautanQr(tokenId, uidPemilik, namaPetugas){
   if(uidPemilik) t += '&u=' + encodeURIComponent(uidPemilik);
   if(namaPetugas) t += '&n=' + encodeURIComponent(namaPetugas);
   return t;
-}
-
-function hentikanPengawasToken(){
-  // Sisa kompatibilitas — pengawas sudah tidak dipakai pada alur satu langkah.
-}
-
-function pasangTimerSesi(){
-  clearInterval(timerInterval);
-  // Hanya sesi yang memang punya batas waktu (QR lama dari klaim era lama)
-  // yang memasang timer; sesi satu-langkah tanpa expired_at = tanpa batas.
-  if(currentRole !== 'adm_sementara' || !admSession || !admSession.expired_at) return;
-  const expiredAt = admSession.expired_at.toDate();
-  timerInterval = setInterval(() => {
-    const who = document.getElementById('whoAmI');
-    if(!who){ clearInterval(timerInterval); return; }
-    const diff = expiredAt - new Date();
-    if(diff <= 0){
-      clearInterval(timerInterval);
-      who.textContent = 'Sesi berakhir — keluar…';
-      setTimeout(()=>{ auth.signOut(); }, 1200);
-      return;
-    }
-    const h = Math.floor(diff/3600000), m = Math.floor((diff%3600000)/60000);
-    who.textContent = 'Petugas: ' + (admSession.nama_petugas||'-') + ' • sisa ' + h + 'j ' + m + 'm';
-  }, 30000);
 }
 
 // ================= DASHBOARD ADM UTAMA =================
@@ -1103,17 +949,18 @@ function menuQrToken(tokenId, namaPetugas, userIdPemilik){
           // soft-delete (ditandai 'dihapus') yang pasti diizinkan oleh update.
           console.warn('Hapus hard ditolak, pakai soft-delete:', e.code || e.message);
           try{
-            // Satu update saja — jenis operasi yang sama dengan "Perpanjang",
-            // yang terbukti diizinkan rules. Penulisan log dihindari agar
-            // kegagalan log tidak menggagalkan penandaan hapus.
-            await ref.update({
-              status: 'dihapus',
-              expired_at: firebase.firestore.Timestamp.fromDate(new Date(0)),
-              nama_petugas: '(dihapus) ' + (namaPetugas||'')
-            });
+            // HANYA field 'status' yang diubah. QR yang sudah kedaluwarsa gagal
+            // dihapus sebelumnya karena update lama ikut menulis expired_at
+            // (ke tanggal 1970) & nama_petugas sekaligus — kombinasi field/nilai
+            // itu kemungkinan besar ditolak rules (mis. rules membatasi field
+            // yang boleh diubah, atau melarang expired_at diset ke masa lalu).
+            // Menandai lewat 'status' saja sudah cukup: muatTokenList() sudah
+            // menyembunyikan baris berstatus 'dihapus' dari daftar.
+            await ref.update({ status: 'dihapus' });
             showMsg(app, 'QR ditandai dihapus & disembunyikan dari daftar.', 'ok');
+            muatTokenList(userIdPemilik);
           }catch(e2){
-            showMsg(app, 'Gagal menghapus QR: ' + (e2.message||e2));
+            showMsg(app, 'Gagal menghapus QR: ' + (e2.message||e2) + (e2.code === 'permission-denied' ? ' — kemungkinan security rules Firestore menolak update pada qr_tokens yang sudah kedaluwarsa/berstatus tertentu.' : ''));
           }
         })
         .finally(selesaiBusy);
