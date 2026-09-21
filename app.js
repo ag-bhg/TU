@@ -288,6 +288,15 @@ auth.onAuthStateChanged(async (user) => {
       const savedNama = sessionStorage.getItem('adm_sementara_nama') || localStorage.getItem('adm_sementara_nama') || '';
       simpanSesiPetugas(savedToken, savedUid, savedNama);
       ensureProfilPemilik(savedUid); // best-effort, tidak menahan render
+      // Pastikan dokumen akses sesi tetap ada juga saat pemulihan sesi
+      // (bila rules menuntutnya untuk menulis tamu).
+      try{
+        await db.collection('adm_sementara_akses').doc(user.uid).set({
+          terikat_ke_userId: savedUid,
+          token_id: savedToken,
+          expired_at: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 36*60*60*1000))
+        });
+      }catch(e){ console.warn('Catatan akses (restore) gagal:', e.code || e.message); }
       currentRole = 'adm_sementara';
       admSession = {tokenId: savedToken, terikat_ke_userId: savedUid, nama_petugas: savedNama};
       appHeader.style.display = 'flex';
@@ -455,6 +464,20 @@ function masukQrOtomatis(token, uidPemilik, namaPetugas, userSaatIni, dariInputK
       }
       simpanSesiPetugas(token, pemilik, nama);
       await ensureProfilPemilik(pemilik); // buat profil bila belum ada (otomatis)
+      // Tulis ulang dokumen akses sesi petugas — SYARAT umum security rules era
+      // lama: petugas anonim hanya boleh menulis ke akun_user/{uid}/tamu bila
+      // ada dokumen adm_sementara_akses/{uidAnonim} yang menunjuk pemilik.
+      // Tanpa ini rules menolak SETIUP penyimpanan tamu (permission-denied).
+      // Tanpa transaksi/verifikasi — satu set, kegagalan rules diabaikan.
+      try{
+        await db.collection('adm_sementara_akses').doc(anon.uid).set({
+          terikat_ke_userId: pemilik,
+          token_id: token,
+          expired_at: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 36*60*60*1000))
+        });
+      }catch(e){
+        console.warn('Catatan akses petugas gagal ditulis (rules):', e.code || e.message);
+      }
       currentRole = 'adm_sementara';
       admSession = {tokenId: token, terikat_ke_userId: pemilik, nama_petugas: nama||''};
       bersihkanUrlQr();
@@ -480,6 +503,17 @@ function targetUserUid(){
 }
 
 function renderInputSheet(){
+  // Bersihkan cache versi lama: versi lama menyimpan saran alamat + antrian
+  // sinkron per token di localStorage — sisa lama membuat saran alamat
+  // memuat data dari token/acara sebelumnya (bug "alamat masih pakai yang lama").
+  try{
+    const hapus = [];
+    for(let i = 0; i < localStorage.length; i++){
+      const k = localStorage.key(i);
+      if(k && (k.indexOf('tamu_alamat_cache_') === 0 || k.indexOf('tamu_pending_') === 0)) hapus.push(k);
+    }
+    hapus.forEach(k => localStorage.removeItem(k));
+  }catch(e){}
   // Status TIDAK diinput petugas (ADM Sementara) — otomatis 'Belum';
   // hanya Akun User/ADM Utama yang memilih status saat menambah.
   const pilihStatus = currentRole !== 'adm_sementara';
@@ -1020,12 +1054,14 @@ async function muatTokenList(userId){
   let rows = '';
   snap.forEach(doc => {
     const d = doc.data();
+    if(d.status === 'dihapus') return; // soft-deleted: disembunyikan dari daftar
     const expired = d.expired_at.toDate() < new Date();
     const badge = d.status === 'nonaktif'
       ? '<span class="badge expired">Nonaktif</span>'
       : (expired ? '<span class="badge expired">Kedaluwarsa</span>' : '<span class="badge aktif">Berlaku</span>');
     rows += '<tr class="baris-qr" data-id="' + doc.id + '" data-nama="' + esc(d.nama_petugas||'') + '"><td><strong>' + esc(d.nama_petugas||'(tanpa nama)') + '</strong><br><span class="token-code" style="font-size:11px;">' + doc.id + '</span></td><td>' + fmtWaktu(d.expired_at) + '</td><td>' + badge + '</td></tr>';
   });
+  if(!rows){ el.innerHTML = '<p class="empty">Belum ada QR petugas.</p>'; return; }
   el.innerHTML = '<div class="sheet-wrap"><table class="sheet" style="min-width:420px;"><thead><tr><th>Petugas</th><th>Berlaku s/d</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
 
   // Ketuk baris QR -> menu: Tampilkan ulang / Perpanjang & aktifkan / Hapus
@@ -1057,8 +1093,29 @@ function menuQrToken(tokenId, namaPetugas, userIdPemilik){
       if(!confirm('Hapus QR petugas "' + (namaPetugas||'(tanpa nama)') + '"? Sesi petugas yang memakainya akan berakhir.')) return;
       mulaiBusy('Menghapus QR…');
       ref.delete()
-        .then(() => showMsg(app, 'QR dihapus.', 'ok'))
-        .catch(e => showMsg(app, 'Gagal: ' + (e.message||e)))
+        .then(() => {
+          // Hapus hard berhasil (rules mengizinkan delete)
+          showMsg(app, 'QR dihapus.', 'ok');
+          muatTokenList(userIdPemilik);
+        })
+        .catch(async (e) => {
+          // Rules umumnya TIDAK mengizinkan delete oleh siapa pun — fallback:
+          // soft-delete (ditandai 'dihapus') yang pasti diizinkan oleh update.
+          console.warn('Hapus hard ditolak, pakai soft-delete:', e.code || e.message);
+          try{
+            // Satu update saja — jenis operasi yang sama dengan "Perpanjang",
+            // yang terbukti diizinkan rules. Penulisan log dihindari agar
+            // kegagalan log tidak menggagalkan penandaan hapus.
+            await ref.update({
+              status: 'dihapus',
+              expired_at: firebase.firestore.Timestamp.fromDate(new Date(0)),
+              nama_petugas: '(dihapus) ' + (namaPetugas||'')
+            });
+            showMsg(app, 'QR ditandai dihapus & disembunyikan dari daftar.', 'ok');
+          }catch(e2){
+            showMsg(app, 'Gagal menghapus QR: ' + (e2.message||e2));
+          }
+        })
         .finally(selesaiBusy);
     }}
   ];
