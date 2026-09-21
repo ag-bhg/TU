@@ -690,6 +690,7 @@ async function renderAdmDashboard(){
       const cred = await secondaryAuth.createUserWithEmailAndPassword(username + EMAIL_DOMAIN, password);
       await db.collection('akun_user').doc(cred.user.uid).set({
         username,
+        password,
         dibuat_tanggal: firebase.firestore.FieldValue.serverTimestamp(),
         kuota_total: 0, kuota_terpakai: 0,
         dibuat_oleh: currentUser.uid
@@ -712,6 +713,59 @@ async function renderAdmDashboard(){
   muatLog();
 }
 
+// ===== KELOLA AKUN (butuh masuk SEBAGAI akun tsb lewat auth kedua — Firebase
+// client SDK tidak punya cara lain bagi satu user mengubah/menghapus akun
+// user lain). Makanya password disimpan di Firestore saat akun dibuat: satu-
+// satunya cara ADM Utama bisa "melihat" & memakainya untuk reauth. =====
+async function masukSbgAkunViaSecondary(email, password){
+  const secondaryApp = firebase.initializeApp(firebaseConfig, 'secondary-' + Date.now());
+  const secondaryAuth = secondaryApp.auth();
+  const cred = await secondaryAuth.signInWithEmailAndPassword(email, password);
+  return {
+    secondaryAuth, user: cred.user,
+    tutup: async () => { try{ await secondaryAuth.signOut(); }catch(e){} try{ await secondaryApp.delete(); }catch(e){} }
+  };
+}
+
+async function hapusSubkoleksiTamu(uid){
+  const ref = db.collection('akun_user').doc(uid).collection('tamu');
+  // Hapus per 400 dokumen supaya aman di bawah batas 500 operasi/batch.
+  while(true){
+    const snap = await ref.limit(400).get();
+    if(snap.empty) return;
+    const batch = db.batch();
+    snap.forEach(d => batch.delete(d.ref));
+    await batch.commit();
+    if(snap.size < 400) return;
+  }
+}
+
+function tampilkanInfoDialog({judul, nilai}){
+  const dlg = document.createElement('div');
+  dlg.className = 'edit-dialog';
+  dlg.innerHTML = `
+    <div class="edit-box">
+      <h3>${esc(judul)}</h3>
+      <input type="text" readonly value="${esc(nilai)}" id="infoNilai" style="font-weight:600;">
+      <div class="edit-actions">
+        <button class="btn-outline" data-tutup>Tutup</button>
+        <button class="btn-primary" data-salin>Salin</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(dlg);
+  const inp = dlg.querySelector('#infoNilai');
+  inp.focus(); inp.select();
+  dlg.querySelector('[data-tutup]').onclick = () => dlg.remove();
+  dlg.addEventListener('keydown', e => { if(e.key === 'Escape') dlg.remove(); });
+  dlg.querySelector('[data-salin]').onclick = async () => {
+    try{
+      await navigator.clipboard.writeText(nilai);
+      showMsg(dlg.querySelector('.edit-box'), 'Tersalin ke clipboard.', 'ok', 2000);
+    }catch(e){ inp.select(); document.execCommand('copy'); }
+  };
+}
+
 async function muatDaftarAkun(){
   const body = document.getElementById('auBody');
   let snap;
@@ -728,7 +782,7 @@ async function muatDaftarAkun(){
   snap.forEach(doc => {
     const d = doc.data(); i++;
     rows += `
-      <tr class="baris-akun" data-id="${doc.id}" data-username="${esc(d.username)}" data-kuota="${d.kuota_total||0}">
+      <tr class="baris-akun" data-id="${doc.id}" data-username="${esc(d.username)}" data-kuota="${d.kuota_total||0}" data-password="${esc(d.password||'')}">
         <td class="tcol-no">${i}</td>
         <td>${esc(d.username)}<div class="muted" style="padding:2px 0 0;">${fmtWaktu(d.dibuat_tanggal)}</div></td>
         <td style="text-align:right;padding-right:8px;">${d.kuota_terpakai||0} / ${d.kuota_total||0}</td>
@@ -767,6 +821,67 @@ async function muatDaftarAkun(){
               muatDaftarAkun();
             }
           });
+        }},
+        '-',
+        {label: 'Lihat password', aksi: () => {
+          const pw = this.dataset.password;
+          tampilkanInfoDialog({
+            judul: 'Password — ' + this.dataset.username,
+            nilai: pw || '(tidak diketahui — akun dibuat sebelum fitur ini ada. Gunakan "Ubah password" untuk menetapkan yang baru — namun itu juga butuh password lama, jadi untuk akun lama silakan minta pemiliknya, atau hapus & buat ulang akunnya.)'
+          });
+        }},
+        {label: 'Ubah password…', aksi: () => {
+          const id = this.dataset.id, username = this.dataset.username, pwLama = this.dataset.password;
+          if(!pwLama){
+            showMsg(app, 'Password lama akun "' + username + '" tidak tersimpan (akun dibuat sebelum fitur ini ada), jadi tidak bisa diubah lewat sini. Solusinya: hapus akun ini lalu buat ulang dengan password baru.');
+            return;
+          }
+          bukaDialogEdit({
+            judul: 'Ubah password — ' + username,
+            fields: [{key:'password_baru', label:'Password baru (min. 6 karakter)', nilai:''}],
+            onSimpan: async (nilai) => {
+              const baru = nilai.password_baru;
+              if(!baru || baru.length < 6) throw new Error('Password baru minimal 6 karakter.');
+              const sesi = await masukSbgAkunViaSecondary(username + EMAIL_DOMAIN, pwLama);
+              try{
+                await sesi.user.updatePassword(baru);
+              }finally{
+                await sesi.tutup();
+              }
+              await db.collection('akun_user').doc(id).update({
+                password: baru,
+                password_diubah_pada: firebase.firestore.FieldValue.serverTimestamp()
+              });
+              showMsg(app, 'Password akun "' + username + '" berhasil diubah.', 'ok');
+              muatDaftarAkun();
+            }
+          });
+        }},
+        {label: 'Hapus akun…', bahaya: true, aksi: () => {
+          const id = this.dataset.id, username = this.dataset.username, pw = this.dataset.password;
+          const konfirmasi = prompt('Menghapus akun "' + username + '" beserta SELURUH data tamunya, dan tidak bisa dibatalkan.\n\nKetik username-nya untuk konfirmasi:');
+          if(konfirmasi !== username) return;
+          mulaiBusy('Menghapus akun…');
+          (async () => {
+            try{
+              await hapusSubkoleksiTamu(id);
+              await db.collection('akun_user').doc(id).delete();
+              if(pw){
+                try{
+                  const sesi = await masukSbgAkunViaSecondary(username + EMAIL_DOMAIN, pw);
+                  await sesi.user.delete();
+                }catch(e){
+                  console.warn('Gagal hapus login Firebase Auth (data akun tetap terhapus):', e.code || e.message);
+                }
+              }
+              showMsg(app, 'Akun "' + username + '" & seluruh data tamunya dihapus.' + (pw ? '' : ' Catatan: login lamanya masih terdaftar di Firebase Auth (password lama tidak tersimpan) — hapus manual lewat Firebase Console bila perlu, walau sudah tidak bisa mengakses data apa pun.'), 'ok', 10000);
+              muatDaftarAkun();
+            }catch(e){
+              showMsg(app, 'Gagal menghapus akun: ' + (e.message||e));
+            }finally{
+              selesaiBusy();
+            }
+          })();
         }}
       ]);
     });
