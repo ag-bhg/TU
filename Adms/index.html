@@ -52,6 +52,12 @@ const pesan = document.getElementById('pesan');
 // sehingga satu kegagalan berputar tanpa henti sampai Firebase memblokir.
 let autoDicoba = false;
 
+// u= (uid pemilik lembar) & n= (nama petugas) dari tautan QR — bila ada, halaman
+// ini TIDAK membaca database sama sekali (QR = tiket fisik yang dipercaya).
+const paramsUrl = new URLSearchParams(window.location.search);
+const uidUrl = paramsUrl.get('u') || '';
+const namaUrl = paramsUrl.get('n') || '';
+
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function tampilPesan(html, tipe){ pesan.innerHTML = '<div class="msg ' + tipe + '">' + html + '</div>'; }
 
@@ -89,17 +95,23 @@ async function masuk(nilaiKode){
       const cred = await auth.signInAnonymously();
       anon = cred.user;
     }
-    // Baca token sekali HANYA untuk mengambil uid pemilik — bukan verifikasi
-    // status/kedaluwarsa. Catatan: bila rules membaca qr_tokens diperketat,
-    // jalur ini bisa diganti param u= dari tautan QR yang dibagikan.
-    const snap = await db.collection('qr_tokens').doc(kode).get();
-    if(!snap.exists) throw new Error('Kode akses tidak ditemukan. Periksa penulisan kode (8 karakter).');
-    const d = snap.data();
-    if(!d.terikat_ke_userId) throw new Error('QR ini tidak terhubung ke lembar tamu mana pun. Minta ADM Utama membuat QR baru.');
+    // u= ada di tautan? Langsung masuk TANPA satu pun baca database.
+    // Hanya kode yang diketik manual (tanpa u=) yang membaca qr_tokens sekali
+    // untuk mencari pemilik lembar — bukan verifikasi status/kedaluwarsa.
+    let pemilik = uidUrl;
+    let nama = namaUrl;
+    if(!pemilik){
+      const snap = await db.collection('qr_tokens').doc(kode).get();
+      if(!snap.exists) throw new Error('Kode akses tidak ditemukan. Periksa penulisan kode (8 karakter).');
+      const d = snap.data();
+      pemilik = d.terikat_ke_userId;
+      if(!nama) nama = d.nama_petugas || '';
+    }
+    if(!pemilik) throw new Error('QR ini tidak terhubung ke lembar tamu mana pun. Minta ADM Utama membuat QR baru.');
     // Satu langkah: simpan sesi lalu langsung masuk aplikasi utama.
     sessionStorage.setItem('adm_sementara_token', kode);
-    sessionStorage.setItem('adm_sementara_uid', d.terikat_ke_userId);
-    sessionStorage.setItem('adm_sementara_nama', d.nama_petugas || '');
+    sessionStorage.setItem('adm_sementara_uid', pemilik);
+    sessionStorage.setItem('adm_sementara_nama', nama);
     tampilPesan('Berhasil! Membuka lembar input...', 'ok');
     setTimeout(() => { window.location.replace('../'); }, 300);
   }catch(e){
