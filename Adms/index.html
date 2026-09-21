@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Akses Petugas — Buku Tamu Digital</title>
+<title>Petugas — Buku Tamu Digital</title>
 <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
 <link rel="stylesheet" href="../style.css">
@@ -12,24 +12,33 @@
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js" defer></script>
 </head>
 <body>
-<main>
-  <div class="center">
-    <div class="login-box">
-      <div class="card">
-        <h2 style="justify-content:center;text-align:center;">Akses Petugas</h2>
-        <p class="muted" style="text-align:center;margin-top:0;">Cara tercepat: <strong>scan QR</strong> — langsung masuk tanpa proses apa pun. Bila hanya punya kode, isi di bawah.</p>
-        <label>Kode Akses</label>
-        <input type="text" id="kode" autocapitalize="characters" autocomplete="off" style="text-transform:uppercase;" placeholder="8 huruf/angka">
-        <button class="btn-primary" style="margin-top:14px;width:100%;padding:13px;" id="btnMasuk">Masuk</button>
-        <div id="pesan"></div>
-        <p class="footer-note">Setelah berhasil, Anda langsung dibawa ke lembar input tamu.<br>Gagal? Perbaiki kodenya lalu tekan Masuk lagi — tidak ada percobaan otomatis berulang.</p>
-      </div>
-    </div>
+
+<header class="app-header" id="appHeader" style="display:none;">
+  <div class="brand">
+    <div class="seal">BT</div>
+    <h1>Buku Tamu — Petugas</h1>
   </div>
-</main>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <div class="who" id="whoAmI"></div>
+    <button class="logout" id="btnLogout">Keluar</button>
+  </div>
+</header>
+
+<main id="app"></main>
 
 <script>
 document.addEventListener('DOMContentLoaded', function(){
+
+/* Halaman ini SENGAJA terpisah dari app.js halaman utama: khusus untuk
+   petugas (ADM Sementara) — tanpa kode dasbor ADM Utama (buat akun, buat QR,
+   daftar akun, dsb). Perbedaan paling penting dari versi lama:
+   1) Setelah login TIDAK diarahkan ke halaman utama (../) — lembar input
+      dirender di sini juga, di /Adms/, supaya tetap ringan.
+   2) TIDAK membaca (get/onSnapshot) seluruh koleksi akun_user/{uid}/tamu.
+      Tabel hanya menampilkan tamu yang DITULIS dari perangkat/sesi ini —
+      disimpan lokal di localStorage begitu tersimpan ke server. Daftar
+      LENGKAP semua tamu (termasuk dari petugas lain) hanya terlihat oleh
+      ADM Utama & pemilik akun di halaman utama. */
 
 const firebaseConfig = {
   apiKey: "AIzaSyAmkwpGeqhRdMWrQPa_ahW_gJ27cQ4DZIo",
@@ -42,31 +51,111 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
+try{ db.enablePersistence({synchronizeTabs:true}).catch(()=>{}); }catch(e){}
 
-const inp = document.getElementById('kode');
-const btn = document.getElementById('btnMasuk');
-const pesan = document.getElementById('pesan');
+const app = document.getElementById('app');
+const appHeader = document.getElementById('appHeader');
+const whoAmI = document.getElementById('whoAmI');
 
-// Auto-proses dari ?akses= HANYA SEKALI. Ini kunci anti-loop: dulu di halaman
-// utama, kode di-proses ulang setiap listener auth menggambar ulang halaman,
-// sehingga satu kegagalan berputar tanpa henti sampai Firebase memblokir.
-let autoDicoba = false;
-
-// u= (uid pemilik lembar) & n= (nama petugas) dari tautan QR — bila ada, halaman
-// ini TIDAK membaca database sama sekali (QR = tiket fisik yang dipercaya).
-const paramsUrl = new URLSearchParams(window.location.search);
-const uidUrl = paramsUrl.get('u') || '';
-const namaUrl = paramsUrl.get('n') || '';
+let admSession = null;     // {tokenId, uid, nama}
+let entriesLokal = [];     // HANYA tamu yang ditambahkan dari perangkat ini
+let sudahDiproses = false; // anti-loop utk ?akses= di URL
 
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function tampilPesan(html, tipe){ pesan.innerHTML = '<div class="msg ' + tipe + '">' + html + '</div>'; }
+function fmtRp(n){ n = Number(n||0); return "Rp " + n.toLocaleString('id-ID'); }
+function showMsg(container, text, type='error', durasi=6000){
+  const el = document.createElement('div');
+  el.className = 'msg ' + type;
+  el.textContent = text;
+  container.prepend(el);
+  setTimeout(()=>el.remove(), durasi);
+}
+
+// ===== OVERLAY LOADING =====
+let busyFailsafeTimer = null;
+function mulaiBusy(teks){
+  let ov = document.getElementById('busyOverlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'busyOverlay';
+    ov.className = 'busy-overlay';
+    ov.innerHTML = '<div class="busy-box"><div class="busy-spinner"></div><div class="busy-text"></div></div>';
+    document.body.appendChild(ov);
+  }
+  ov.querySelector('.busy-text').textContent = teks || 'Memproses…';
+  ov.hidden = false;
+  document.body.classList.add('busy');
+  clearTimeout(busyFailsafeTimer);
+  busyFailsafeTimer = setTimeout(selesaiBusy, 45000);
+}
+function selesaiBusy(){
+  clearTimeout(busyFailsafeTimer);
+  const ov = document.getElementById('busyOverlay');
+  if(ov) ov.hidden = true;
+  document.body.classList.remove('busy');
+}
+
+// ===== MENU KONTEKS =====
+let ctxMenuEl = null;
+function tutupMenuKonteks(){ if(ctxMenuEl){ ctxMenuEl.remove(); ctxMenuEl = null; } }
+document.addEventListener('click', (e) => { if(ctxMenuEl && !ctxMenuEl.contains(e.target)) tutupMenuKonteks(); });
+window.addEventListener('scroll', tutupMenuKonteks, true);
+function tampilkanMenuKonteks(x, y, item){
+  tutupMenuKonteks();
+  const m = document.createElement('div');
+  m.className = 'ctx-menu';
+  item.forEach((it) => {
+    if(it === '-'){ const sep = document.createElement('div'); sep.className='ctx-sep'; m.appendChild(sep); return; }
+    const b = document.createElement('button');
+    b.className = 'ctx-item' + (it.bahaya ? ' bahaya' : '');
+    b.textContent = it.label;
+    b.onclick = (ev) => { ev.stopPropagation(); tutupMenuKonteks(); it.aksi(); };
+    m.appendChild(b);
+  });
+  document.body.appendChild(m);
+  const rect = m.getBoundingClientRect();
+  const px = Math.min(x, window.innerWidth - rect.width - 8);
+  const py = Math.min(y, window.innerHeight - rect.height - 8);
+  m.style.left = Math.max(8, px) + 'px';
+  m.style.top = Math.max(8, py) + 'px';
+  ctxMenuEl = m;
+}
+
+// ===== DIALOG EDIT =====
+function bukaDialogEdit({judul, fields, onSimpan}){
+  const dlg = document.createElement('div');
+  dlg.className = 'edit-dialog';
+  const formHtml = fields.map(f => `
+    <label>${f.label}</label>
+    <input type="text" data-ef="${f.key}" value="${esc(f.nilai)}" ${f.numerik?'inputmode="numeric" style="text-align:right;"':''}>
+  `).join('');
+  dlg.innerHTML = `<div class="edit-box"><h3>${esc(judul)}</h3>${formHtml}
+    <div class="edit-actions"><button class="btn-outline" data-batal>Batal</button><button class="btn-primary" data-simpan>Simpan</button></div></div>`;
+  document.body.appendChild(dlg);
+  const inputs = dlg.querySelectorAll('input[data-ef]');
+  if(inputs[0]) inputs[0].focus();
+  dlg.querySelector('[data-batal]').onclick = () => dlg.remove();
+  dlg.addEventListener('keydown', e => { if(e.key === 'Escape') dlg.remove(); });
+  dlg.querySelector('[data-simpan]').onclick = async () => {
+    const nilai = {};
+    inputs.forEach(inp => {
+      const k = inp.dataset.ef;
+      nilai[k] = (k === 'rp') ? (parseInt(inp.value.replace(/[^0-9]/g,''),10)||0) : inp.value.trim();
+    });
+    dlg.remove();
+    mulaiBusy('Menyimpan perubahan…');
+    try{ await onSimpan(nilai); }
+    catch(e){ showMsg(app, 'Gagal menyimpan: ' + (e.message||e)); }
+    finally{ selesaiBusy(); }
+  };
+}
 
 function pesanError(e){
   const code = e && e.code ? e.code : '';
   if(code === 'auth/operation-not-allowed' || code === 'auth/admin-restricted-operation')
-    return 'Login anonim belum diaktifkan. Di Firebase Console &gt; Authentication &gt; Sign-in method, aktifkan penyedia "Anonymous".';
+    return 'Login anonim belum diaktifkan. Di Firebase Console > Authentication > Sign-in method, aktifkan penyedia "Anonymous".';
   if(code === 'auth/too-many-requests')
-    return 'Server sedang menolak permintaan perangkat ini. Tunggu beberapa menit lalu tekan Masuk sekali lagi.';
+    return 'Server menolak sementara perangkat ini. Tunggu beberapa menit lalu coba lagi.';
   if(code === 'auth/network-request-failed')
     return 'Koneksi ke server terblokir (biasanya Brave Shields). Matikan Shields untuk situs ini atau pakai Chrome.';
   if(code === 'permission-denied')
@@ -74,62 +163,381 @@ function pesanError(e){
   return esc((e && e.message) ? e.message : 'Terjadi kesalahan.');
 }
 
-async function masuk(nilaiKode){
-  if(btn.disabled) return;
-  const kode = String(nilaiKode || '').trim().toUpperCase();
-  if(!/^[A-Z0-9]{8}$/.test(kode)){
-    tampilPesan('Kode harus tepat 8 huruf/angka tanpa spasi (contoh: DBBLHEH7).', 'error');
-    return;
-  }
-  // Yang masuk di halaman ini adalah akun utama? Jangan ganggu sesinya.
-  const kini = auth.currentUser;
-  if(kini && !kini.isAnonymous){
-    tampilPesan('Perangkat ini sedang masuk sebagai akun utama. Tekan "Keluar" di halaman utama dulu untuk masuk sebagai petugas.', 'error');
-    return;
-  }
-  btn.disabled = true; btn.textContent = 'Memproses...';
-  pesan.innerHTML = '';
+// ===== SESI PETUGAS: sessionStorage + cadangan localStorage =====
+function kunciLokal(tokenId){ return 'adm_sementara_lokal_' + tokenId; }
+function simpanSesi(tokenId, uid, nama){
+  sessionStorage.setItem('adm_sementara_token', tokenId);
+  sessionStorage.setItem('adm_sementara_uid', uid);
+  if(nama) sessionStorage.setItem('adm_sementara_nama', nama);
   try{
-    let anon = kini;
-    if(!anon || !anon.isAnonymous){
-      const cred = await auth.signInAnonymously();
-      anon = cred.user;
+    localStorage.setItem('adm_sementara_token', tokenId);
+    localStorage.setItem('adm_sementara_uid', uid);
+    if(nama) localStorage.setItem('adm_sementara_nama', nama);
+  }catch(e){}
+}
+function hapusSesi(){
+  const tokenId = admSession && admSession.tokenId;
+  sessionStorage.removeItem('adm_sementara_token');
+  sessionStorage.removeItem('adm_sementara_uid');
+  sessionStorage.removeItem('adm_sementara_nama');
+  try{
+    localStorage.removeItem('adm_sementara_token');
+    localStorage.removeItem('adm_sementara_uid');
+    localStorage.removeItem('adm_sementara_nama');
+    if(tokenId) localStorage.removeItem(kunciLokal(tokenId));
+  }catch(e){}
+}
+function muatEntriesLokal(tokenId){
+  try{
+    const raw = localStorage.getItem(kunciLokal(tokenId));
+    entriesLokal = raw ? JSON.parse(raw) : [];
+  }catch(e){ entriesLokal = []; }
+}
+function simpanEntriesLokal(){
+  if(!admSession) return;
+  try{ localStorage.setItem(kunciLokal(admSession.tokenId), JSON.stringify(entriesLokal)); }catch(e){}
+}
+function bersihkanUrlQr(){ try{ window.history.replaceState(null, '', window.location.pathname); }catch(e){} }
+
+let profilDijamin = {};
+function ensureProfilPemilik(uid){
+  if(!uid) return Promise.resolve();
+  if(!profilDijamin[uid]){
+    const ref = db.collection('akun_user').doc(uid);
+    profilDijamin[uid] = ref.get().then(snap => {
+      if(snap.exists) return;
+      return ref.set({
+        username: 'lembar-' + uid.slice(0,6),
+        dibuat_tanggal: firebase.firestore.FieldValue.serverTimestamp(),
+        kuota_total: 0, kuota_terpakai: 0,
+        dibuat_oleh: 'qr-otomatis', dibuat_via: 'qr_scan'
+      }, {merge:true}).catch(()=>{});
+    }).catch(()=>{});
+  }
+  return profilDijamin[uid];
+}
+
+function tulisLog(namaTamu){
+  db.collection('log_adm_sementara').add({
+    token_id: admSession.tokenId,
+    nama_petugas: admSession.nama || '-',
+    terikat_ke_userId: admSession.uid,
+    aksi: 'tambah',
+    nama_tamu: namaTamu,
+    waktu: firebase.firestore.FieldValue.serverTimestamp(),
+    ttl_hapus_pada: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 48*60*60*1000))
+  }).catch(()=>{});
+}
+
+// ================= ROUTING =================
+auth.onAuthStateChanged(async (user) => {
+  const params = new URLSearchParams(window.location.search);
+  const kodeUrl = params.get('akses');
+  const uidUrl = params.get('u') || '';
+  const namaUrl = params.get('n') || '';
+
+  if(user && !user.isAnonymous){
+    // Perangkat ini sedang login sebagai akun utama/akun — bukan wilayah halaman ini.
+    appHeader.style.display = 'none';
+    app.innerHTML = '<div class="center"><div class="card login-box"><p class="empty">Perangkat ini sedang masuk sebagai akun utama/akun.<br>Tekan "Keluar" di halaman utama dulu untuk memakai akses petugas di sini.</p><p class="muted" style="text-align:center;"><a href="../">&larr; Ke halaman utama</a></p></div></div>';
+    return;
+  }
+
+  if(kodeUrl){
+    if(sudahDiproses) return; // anti-loop: proses ?akses= hanya sekali
+    sudahDiproses = true;
+    masuk(kodeUrl, uidUrl, namaUrl, user);
+    return;
+  }
+
+  if(user && user.isAnonymous){
+    const savedToken = sessionStorage.getItem('adm_sementara_token') || localStorage.getItem('adm_sementara_token');
+    const savedUid = sessionStorage.getItem('adm_sementara_uid') || localStorage.getItem('adm_sementara_uid');
+    if(savedToken && savedUid){
+      const savedNama = sessionStorage.getItem('adm_sementara_nama') || localStorage.getItem('adm_sementara_nama') || '';
+      simpanSesi(savedToken, savedUid, savedNama);
+      admSession = {tokenId: savedToken, uid: savedUid, nama: savedNama};
+      muatEntriesLokal(savedToken);
+      ensureProfilPemilik(savedUid);
+      try{
+        await db.collection('adm_sementara_akses').doc(user.uid).set({
+          terikat_ke_userId: savedUid, token_id: savedToken,
+          expired_at: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 36*60*60*1000))
+        });
+      }catch(e){ console.warn('Catatan akses (restore) gagal:', e.code || e.message); }
+      tampilkanSheet();
+      return;
     }
-    // u= ada di tautan? Langsung masuk TANPA satu pun baca database.
-    // Hanya kode yang diketik manual (tanpa u=) yang membaca qr_tokens sekali
-    // untuk mencari pemilik lembar — bukan verifikasi status/kedaluwarsa.
-    let pemilik = uidUrl;
-    let nama = namaUrl;
+  }
+
+  appHeader.style.display = 'none';
+  renderLogin();
+});
+
+// ================= LOGIN (kode manual) =================
+function renderLogin(){
+  app.innerHTML = `
+    <div class="center">
+      <div class="login-box">
+        <div class="card">
+          <h2 style="justify-content:center;text-align:center;">Akses Petugas</h2>
+          <p class="muted" style="text-align:center;margin-top:0;">Cara tercepat: <strong>scan QR</strong> — langsung masuk tanpa proses apa pun. Bila hanya punya kode, isi di bawah.</p>
+          <label>Kode Akses</label>
+          <input type="text" id="kode" autocapitalize="characters" autocomplete="off" style="text-transform:uppercase;" placeholder="8 huruf/angka">
+          <button class="btn-primary" style="margin-top:14px;width:100%;padding:13px;" id="btnMasuk">Masuk</button>
+          <div id="pesan"></div>
+          <p class="footer-note">Setelah berhasil, Anda langsung dibawa ke lembar input tamu.<br>Gagal? Perbaiki kodenya lalu tekan Masuk lagi — tidak ada percobaan otomatis berulang.</p>
+        </div>
+      </div>
+    </div>
+  `;
+  const inp = document.getElementById('kode');
+  const btn = document.getElementById('btnMasuk');
+  const pesan = document.getElementById('pesan');
+
+  async function coba(nilaiKode){
+    if(btn.disabled) return;
+    const kode = String(nilaiKode || '').trim().toUpperCase();
+    if(!/^[A-Z0-9]{8}$/.test(kode)){
+      pesan.innerHTML = '<div class="msg error">Kode harus tepat 8 huruf/angka tanpa spasi (contoh: DBBLHEH7).</div>';
+      return;
+    }
+    btn.disabled = true; btn.textContent = 'Memproses...';
+    pesan.innerHTML = '';
+    await masuk(kode, '', '', auth.currentUser, () => {
+      btn.disabled = false; btn.textContent = 'Masuk';
+    }, pesan);
+  }
+
+  btn.onclick = () => coba(inp.value);
+  inp.addEventListener('keydown', (e) => { if(e.key === 'Enter') coba(inp.value); });
+  inp.focus();
+}
+
+// ================= PROSES MASUK =================
+async function masuk(token, uidPemilikAwal, namaAwal, userSaatIni, onGagal, pesanEl){
+  mulaiBusy('Membuka lembar input…');
+  try{
+    let pemilik = uidPemilikAwal;
+    let nama = namaAwal;
     if(!pemilik){
-      const snap = await db.collection('qr_tokens').doc(kode).get();
+      const snap = await db.collection('qr_tokens').doc(token).get();
       if(!snap.exists) throw new Error('Kode akses tidak ditemukan. Periksa penulisan kode (8 karakter).');
       const d = snap.data();
       pemilik = d.terikat_ke_userId;
       if(!nama) nama = d.nama_petugas || '';
     }
     if(!pemilik) throw new Error('QR ini tidak terhubung ke lembar tamu mana pun. Minta ADM Utama membuat QR baru.');
-    // Satu langkah: simpan sesi lalu langsung masuk aplikasi utama.
-    sessionStorage.setItem('adm_sementara_token', kode);
-    sessionStorage.setItem('adm_sementara_uid', pemilik);
-    sessionStorage.setItem('adm_sementara_nama', nama);
-    tampilPesan('Berhasil! Membuka lembar input...', 'ok');
-    setTimeout(() => { window.location.replace('../'); }, 300);
+
+    let anon = userSaatIni;
+    if(!anon || !anon.isAnonymous){
+      const cred = await auth.signInAnonymously();
+      anon = cred.user;
+    }
+    simpanSesi(token, pemilik, nama);
+    admSession = {tokenId: token, uid: pemilik, nama: nama || ''};
+    muatEntriesLokal(token);
+    await ensureProfilPemilik(pemilik);
+    try{
+      await db.collection('adm_sementara_akses').doc(anon.uid).set({
+        terikat_ke_userId: pemilik, token_id: token,
+        expired_at: firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 36*60*60*1000))
+      });
+    }catch(e){ console.warn('Catatan akses petugas gagal ditulis (rules):', e.code || e.message); }
+    bersihkanUrlQr();
+    selesaiBusy();
+    tampilkanSheet();
   }catch(e){
-    // Gagal = BERHENTI di sini. Tanpa retry otomatis apa pun.
-    tampilPesan(pesanError(e), 'error');
-    btn.disabled = false; btn.textContent = 'Masuk';
+    bersihkanUrlQr();
+    selesaiBusy();
+    if(pesanEl){
+      pesanEl.innerHTML = '<div class="msg error">' + pesanError(e) + '</div>';
+      if(onGagal) onGagal();
+    }else{
+      appHeader.style.display = 'none';
+      app.innerHTML = '<div class="center"><div class="card login-box"><p class="empty">' + esc((e && e.message) || 'Gagal membuka QR.') + '</p><p class="muted" style="text-align:center;">' + pesanError(e) + '</p><button class="btn-primary" id="btnCoba" style="width:100%;margin-top:10px;padding:12px;">Coba lagi</button></div></div>';
+      const bc = document.getElementById('btnCoba');
+      if(bc) bc.onclick = renderLogin;
+    }
   }
 }
 
-btn.onclick = () => masuk(inp.value);
-inp.addEventListener('keydown', (e) => { if(e.key === 'Enter') masuk(inp.value); });
-
-const kodeUrl = new URLSearchParams(window.location.search).get('akses');
-if(kodeUrl && !autoDicoba){
-  autoDicoba = true;
-  inp.value = kodeUrl.toUpperCase();
-  masuk(kodeUrl);
+// ================= LEMBAR INPUT (ringan — data lokal saja) =================
+function tampilkanSheet(){
+  appHeader.style.display = 'flex';
+  whoAmI.textContent = 'Petugas: ' + (admSession.nama || '-');
+  app.innerHTML = `
+    <div class="card quick-card">
+      <h2>Tambah Tamu</h2>
+      <div class="quick-line">
+        <input type="text" id="qNama" placeholder="Nama tamu" autocomplete="off">
+        <input type="text" id="qAlamat" placeholder="Alamat (opsional)" autocomplete="off">
+        <input type="text" id="qRp" inputmode="numeric" placeholder="Rp" style="text-align:right;">
+        <button class="btn-primary" id="qTambah">+ Tambah</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Tamu yang saya input <span class="muted" id="jmlTamu"></span><button class="btn-outline btn-sm" id="btnEkspor" type="button">⬇ Export ke Excel</button></h2>
+      <p class="muted" style="margin-top:-4px;">Hanya menampilkan tamu yang ditambahkan dari perangkat ini. Daftar lengkap semua tamu bisa dilihat ADM.</p>
+      <div class="sheet-wrap">
+        <table class="sheet">
+          <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Rp</th><th class="tcol-aksi-hidden"></th></tr></thead>
+          <tbody id="sheetBody"></tbody>
+          <tfoot>
+            <tr class="sheet-total">
+              <td colspan="3">TOTAL (SESI INI)</td>
+              <td style="text-align:right;" id="totalRp">Rp 0</td>
+              <td class="tcol-aksi-hidden"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <p class="footer-note">Ketuk baris untuk membuka menu: Edit / Hapus.</p>
+    </div>
+  `;
+  document.getElementById('btnEkspor').onclick = eksporCsv;
+  renderTabelLokal();
+  pasangFormTambah();
 }
+
+function pasangFormTambah(){
+  const eNama = document.getElementById('qNama');
+  const eAlamat = document.getElementById('qAlamat');
+  const eRp = document.getElementById('qRp');
+  const btn = document.getElementById('qTambah');
+
+  eRp.addEventListener('input', () => {
+    const digits = eRp.value.replace(/[^0-9]/g,'');
+    eRp.value = digits ? 'Rp' + parseInt(digits,10).toLocaleString('id-ID') : '';
+  });
+
+  async function tambah(){
+    if(btn.disabled) return;
+    const nama = eNama.value.trim();
+    if(!nama){ eNama.focus(); return; }
+    const alamat = eAlamat.value.trim();
+    const rp = parseInt(eRp.value.replace(/[^0-9]/g,''),10) || 0;
+    // Kosongkan & fokus dulu — petugas langsung ketik tamu berikutnya
+    eNama.value=''; eAlamat.value=''; eRp.value='';
+    eNama.focus();
+
+    const ref = db.collection('akun_user').doc(admSession.uid).collection('tamu').doc();
+    const baris = {id: ref.id, nama, alamat, rp, waktuLokal: Date.now(), gagal: false};
+    entriesLokal.unshift(baris);
+    simpanEntriesLokal();
+    renderTabelLokal();
+
+    try{
+      await ref.set({
+        nama, alamat, rp,
+        status: 'belum',
+        permanen: false,
+        dicatat_oleh: 'adm_sementara',
+        dicatat_pada: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      tulisLog(nama);
+    }catch(e){
+      baris.gagal = true;
+      simpanEntriesLokal();
+      renderTabelLokal();
+      showMsg(app.querySelector('.quick-card'), 'Gagal menyimpan "' + nama + '": ' + (e.message||e) + ' — cek koneksi lalu tambahkan ulang.', 'error', 10000);
+    }
+  }
+
+  btn.onclick = tambah;
+  [eNama, eAlamat, eRp].forEach(el => el.addEventListener('keydown', e => { if(e.key === 'Enter') tambah(); }));
+  eNama.focus();
+}
+
+function renderTabelLokal(){
+  const body = document.getElementById('sheetBody');
+  if(!body) return;
+  let total = 0;
+  let rows = '';
+  entriesLokal.forEach((t, idx) => {
+    total += Number(t.rp)||0;
+    rows += `
+      <tr class="baris-tamu${t.gagal?' baru':''}" data-idx="${idx}">
+        <td class="tcol-no">${idx+1}</td>
+        <td>${esc(t.nama)}${t.gagal ? ' <span class="badge expired">gagal simpan</span>' : ''}</td>
+        <td>${esc(t.alamat||'')}</td>
+        <td style="text-align:right;padding-right:8px;">${t.rp ? fmtRp(t.rp) : '—'}</td>
+        <td class="tcol-aksi-hidden"></td>
+      </tr>`;
+  });
+  body.innerHTML = rows || '<tr><td colspan="4"><p class="empty">Belum ada tamu yang Anda tambahkan. Ketik di form atas — tekan Enter untuk tambah cepat.</p></td></tr>';
+  const totalEl = document.getElementById('totalRp');
+  if(totalEl) totalEl.textContent = fmtRp(total);
+  const jml = document.getElementById('jmlTamu');
+  if(jml) jml.textContent = '(' + entriesLokal.length + ')';
+
+  body.querySelectorAll('tr.baris-tamu').forEach(tr => {
+    tr.addEventListener('click', function(e){
+      e.stopPropagation();
+      const rect = this.getBoundingClientRect();
+      tampilkanMenuKonteks(e.clientX || rect.left, e.clientY || rect.top, menuBarisLokal(Number(this.dataset.idx)));
+    });
+  });
+}
+
+function menuBarisLokal(idx){
+  const t = entriesLokal[idx];
+  const ref = db.collection('akun_user').doc(admSession.uid).collection('tamu').doc(t.id);
+  return [
+    {label: 'Edit data…', aksi: () => {
+      bukaDialogEdit({
+        judul: 'Edit — ' + t.nama,
+        fields: [
+          {key:'nama', label:'Nama', nilai: t.nama},
+          {key:'alamat', label:'Alamat', nilai: t.alamat||''},
+          {key:'rp', label:'Rp', nilai: t.rp ? Number(t.rp).toLocaleString('id-ID') : '', numerik:true}
+        ],
+        onSimpan: async (nilai) => {
+          await ref.set(nilai, {merge:true});
+          Object.assign(t, nilai);
+          simpanEntriesLokal();
+          renderTabelLokal();
+        }
+      });
+    }},
+    '-',
+    {label: 'Hapus data', bahaya: true, aksi: () => {
+      if(!confirm('Hapus data tamu "' + t.nama + '"?')) return;
+      mulaiBusy('Menghapus…');
+      ref.delete()
+        .then(() => {
+          entriesLokal.splice(idx, 1);
+          simpanEntriesLokal();
+          renderTabelLokal();
+        })
+        .catch(e => showMsg(app, 'Gagal menghapus: ' + (e.message||e)))
+        .finally(selesaiBusy);
+    }}
+  ];
+}
+
+function eksporCsv(){
+  if(!entriesLokal.length){ alert('Belum ada tamu yang Anda tambahkan untuk diekspor.'); return; }
+  const kutip = (v) => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+  const baris = [['No','Nama','Alamat','Rp'].map(kutip).join(';')];
+  entriesLokal.forEach((t,i) => baris.push([i+1, t.nama, t.alamat||'', t.rp||0].map(kutip).join(';')));
+  const total = entriesLokal.reduce((s,t)=>s+(Number(t.rp)||0),0);
+  baris.push(['', 'TOTAL', '', total].map(kutip).join(';'));
+  const blob = new Blob(['\uFEFF' + baris.join('\r\n')], {type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'tamu-petugas-' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
+
+document.getElementById('btnLogout').onclick = async () => {
+  hapusSesi();
+  admSession = null;
+  entriesLokal = [];
+  appHeader.style.display = 'none';
+  await auth.signOut();
+};
 
 });
 </script>
