@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lembar Tamu Saya — Buku Tamu Digital</title>
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
+<link rel="stylesheet" href="style.css">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js" defer></script>
+<script src="js/common.js" defer></script>
+<script src="js/user.js" defer></script>
+</head>
+<body>
+
+<header class="app-header" id="appHeader" style="display:none;">
+  <div class="brand">
+    <div class="seal">BT</div>
+    <h1>Buku Tamu — Lembar Saya</h1>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <div class="who" id="whoAmI"></div>
+    <button class="logout" id="btnLogout">Keluar</button>
+  </div>
+</header>
+
+<main id="app"><div class="card"><p class="empty">Memuat…</p></div></main>
+
+</body>
+</html>
