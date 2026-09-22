@@ -77,6 +77,29 @@ button{cursor:pointer;border:none;border-radius:6px;padding:10px 14px;font-size:
 .sync-pill .dot{width:8px;height:8px;border-radius:50%;background:var(--gold);flex:none;}
 .sync-pill.online .dot{background:var(--green);}
 .sync-pill.dirty .dot{background:var(--maroon);}
+.cari-sort-bar{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  margin:2px 0 12px;padding-bottom:10px;border-bottom:1px solid var(--paper-2);
+}
+.cari-box{position:relative;flex:1;min-width:200px;}
+.cari-box .cari-icon{
+  position:absolute;left:11px;top:50%;transform:translateY(-50%);
+  color:var(--muted);font-size:15px;pointer-events:none;line-height:1;
+}
+.cari-box input{padding-left:32px;}
+.sort-tabs{display:flex;align-items:center;gap:8px;flex:none;}
+.sort-tabs button{
+  background:none;border:none;padding:6px 2px;cursor:pointer;
+  font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.2px;
+  border-bottom:2px solid transparent;border-radius:0;white-space:nowrap;
+}
+.sort-tabs button.aktif{color:var(--maroon);border-bottom-color:var(--gold);}
+.sort-tabs button:hover{color:var(--ink-2);}
+.sort-tabs .pemisah{color:var(--line);font-size:12px;}
+@media(max-width:600px){
+  .cari-sort-bar{gap:8px 14px;}
+  .cari-box{flex:100%;}
+}
 .sheet-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:#fffef9;}
 table.sheet{width:100%;border-collapse:collapse;font-size:13px;min-width:560px;}
 table.sheet th{
