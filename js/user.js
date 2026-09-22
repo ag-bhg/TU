@@ -14,7 +14,10 @@ const whoAmI = document.getElementById('whoAmI');
 let onSnapshotUnsub = null;
 let targetUid = null;
 let addrSuggestions = [];
-let dataTamuTerkini = []; // salinan data tampil — sumber ekspor CSV
+let dataTamuTerkini = []; // salinan data tampil (setelah cari+urut) — sumber ekspor CSV
+let semuaTamu = [];       // salinan MENTAH seluruh dokumen dari snapshot terakhir
+let filterTeks = '';      // kata kunci pencarian (nama atau alamat)
+let modeSort = 'waktu';   // 'waktu' (terbaru dulu, apa adanya dari server) | 'alamat' (A–Z)
 
 document.getElementById('btnLogout').onclick = () => BT.keluar(() => {
   if(onSnapshotUnsub){ onSnapshotUnsub(); onSnapshotUnsub = null; }
@@ -46,6 +49,17 @@ function renderInputSheet(data){
     <div class="card">
       <h2>Hasil Daftar Tamu <span class="muted" id="jmlTamu"></span><button class="btn-outline btn-sm" id="btnEkspor" type="button">⬇ Export ke Excel</button></h2>
       <p class="muted" style="margin-top:-4px;">Daftar lengkap real-time — termasuk tamu yang diinput petugas (ADM Sementara) lewat QR, di perangkat mana pun.</p>
+      <div class="cari-sort-bar">
+        <div class="cari-box">
+          <span class="cari-icon" aria-hidden="true">⌕</span>
+          <input type="text" id="cariInput" placeholder="Cari nama atau alamat…" autocomplete="off">
+        </div>
+        <div class="sort-tabs" id="sortTabs" role="tablist" aria-label="Urutkan tabel">
+          <button type="button" data-mode="waktu" class="aktif">Terbaru</button>
+          <span class="pemisah">·</span>
+          <button type="button" data-mode="alamat">Alamat A–Z</button>
+        </div>
+      </div>
       <div class="sheet-wrap">
         <table class="sheet">
           <thead><tr><th class="tcol-no">No</th><th>Nama</th><th>Alamat</th><th style="text-align:right;">Rp</th><th class="tcol-status">Status</th><th class="tcol-aksi-hidden"></th></tr></thead>
@@ -66,7 +80,27 @@ function renderInputSheet(data){
 
   document.getElementById('btnEkspor').onclick = () => eksporCsv('daftar-tamu-' + (data.username||''));
   pasangFormCepat();
+  pasangCariSort();
   pasangLangganan();
+}
+
+function pasangCariSort(){
+  const cari = document.getElementById('cariInput');
+  cari.value = filterTeks;
+  cari.addEventListener('input', () => {
+    filterTeks = cari.value;
+    renderTabel();
+  });
+
+  const tabs = document.getElementById('sortTabs');
+  tabs.querySelectorAll('button[data-mode]').forEach(btn => {
+    if(btn.dataset.mode === modeSort) btn.classList.add('aktif'); else btn.classList.remove('aktif');
+    btn.onclick = () => {
+      modeSort = btn.dataset.mode;
+      tabs.querySelectorAll('button[data-mode]').forEach(b => b.classList.toggle('aktif', b === btn));
+      renderTabel();
+    };
+  });
 }
 
 function pasangFormCepat(){
@@ -122,7 +156,18 @@ function pasangLangganan(){
   onSnapshotUnsub = db.collection('akun_user').doc(targetUid).collection('tamu')
     .orderBy('dicatat_pada','desc')
     .onSnapshot({includeMetadataChanges: true}, (snap) => {
-      renderTabel(snap);
+      semuaTamu = snap.docs.map(doc => {
+        const t = doc.data();
+        return {
+          id: doc.id,
+          nama: t.nama || '',
+          alamat: t.alamat || '',
+          rp: Number(t.rp)||0,
+          status: t.status === 'sudah' ? 'sudah' : 'belum',
+          baru: doc.metadata.hasPendingWrites
+        };
+      });
+      renderTabel();
       const hasPending = snap.docs.some(d => d.metadata.hasPendingWrites);
       const pill = document.getElementById('syncPill');
       const txt = document.getElementById('syncText');
@@ -137,40 +182,64 @@ function pasangLangganan(){
     });
 }
 
-function renderTabel(snap){
+// Bandingkan alamat A–Z (lokal Indonesia); alamat kosong selalu di bawah.
+function bandingkanAlamat(a, b){
+  if(!a.alamat && !b.alamat) return 0;
+  if(!a.alamat) return 1;
+  if(!b.alamat) return -1;
+  return a.alamat.localeCompare(b.alamat, 'id', {sensitivity:'base'});
+}
+
+function renderTabel(){
   const body = document.getElementById('sheetBody');
   if(!body) return;
-  let total = 0, sudah = 0, i = 0;
+
+  // Saran alamat (datalist) & total keseluruhan selalu dari SELURUH data,
+  // supaya tidak berubah-ubah hanya karena sedang menyaring pencarian.
   addrSuggestions = [];
-  dataTamuTerkini = [];
-  let rows = '';
-  snap.forEach(doc => {
-    const t = doc.data();
-    i++;
-    total += Number(t.rp)||0;
+  semuaTamu.forEach(t => { if(t.alamat && addrSuggestions.length < 60) addrSuggestions.push(t.alamat); });
+  const dl = document.getElementById('addrList');
+  if(dl) dl.innerHTML = addrSuggestions.map(a=>'<option value="'+esc(a)+'">').join('');
+
+  const kataKunci = filterTeks.trim().toLowerCase();
+  let daftar = !kataKunci ? semuaTamu.slice() : semuaTamu.filter(t =>
+    t.nama.toLowerCase().includes(kataKunci) || t.alamat.toLowerCase().includes(kataKunci)
+  );
+  if(modeSort === 'alamat') daftar = daftar.slice().sort(bandingkanAlamat);
+
+  dataTamuTerkini = daftar.map(t => ({nama: t.nama, alamat: t.alamat, rp: t.rp, status: t.status}));
+
+  let total = 0, sudah = 0;
+  let rows = daftar.map((t, idx) => {
+    total += t.rp;
     if(t.status === 'sudah') sudah++;
-    if(t.alamat && addrSuggestions.length < 60) addrSuggestions.push(t.alamat);
-    dataTamuTerkini.push({nama: t.nama, alamat: t.alamat||'', rp: Number(t.rp)||0, status: t.status==='sudah' ? 'sudah' : 'belum'});
-    const pending = doc.metadata.hasPendingWrites ? ' baru' : '';
-    rows += `
-      <tr class="baris-tamu${pending}" data-id="${doc.id}" data-nama="${esc(t.nama)}" data-alamat="${esc(t.alamat||'')}" data-rp="${Number(t.rp)||0}" data-status="${t.status==='sudah'?'sudah':'belum'}">
-        <td class="tcol-no">${i}</td>
+    return `
+      <tr class="baris-tamu${t.baru ? ' baru' : ''}" data-id="${t.id}" data-nama="${esc(t.nama)}" data-alamat="${esc(t.alamat)}" data-rp="${t.rp}" data-status="${t.status}">
+        <td class="tcol-no">${idx+1}</td>
         <td>${esc(t.nama)}</td>
-        <td>${esc(t.alamat||'')}</td>
+        <td>${esc(t.alamat)}</td>
         <td style="text-align:right;padding-right:8px;">${t.rp ? fmtRp(t.rp) : '—'}</td>
         <td class="tcol-status" style="text-align:center;"><span class="badge ${t.status==='sudah'?'aktif':'belum'}">${t.status==='sudah'?'Sudah':'Belum'}</span></td>
         <td class="tcol-aksi-hidden"></td>
       </tr>`;
-  });
-  body.innerHTML = rows || '<tr><td colspan="6"><p class="empty">Belum ada tamu. Ketik di form atas, atau tunggu petugas menambahkannya lewat QR.</p></td></tr>';
-  const dl = document.getElementById('addrList');
-  if(dl) dl.innerHTML = addrSuggestions.map(a=>'<option value="'+esc(a)+'">').join('');
+  }).join('');
+
+  if(!rows){
+    rows = '<tr><td colspan="6"><p class="empty">' + (kataKunci
+      ? 'Tidak ada tamu yang cocok dengan "' + esc(filterTeks.trim()) + '".'
+      : 'Belum ada tamu. Ketik di form atas, atau tunggu petugas menambahkannya lewat QR.') + '</p></td></tr>';
+  }
+  body.innerHTML = rows;
+
   const totalEl = document.getElementById('totalRp');
   const infoEl = document.getElementById('totalInfo');
   if(totalEl) totalEl.textContent = fmtRp(total);
-  if(infoEl) infoEl.textContent = i + ' tamu • ' + sudah + ' sudah kembali';
+  if(infoEl){
+    infoEl.textContent = daftar.length + ' tamu • ' + sudah + ' sudah kembali' +
+      (kataKunci ? ' (disaring dari ' + semuaTamu.length + ')' : '');
+  }
   const jml = document.getElementById('jmlTamu');
-  if(jml) jml.textContent = '(' + i + ')';
+  if(jml) jml.textContent = '(' + daftar.length + (kataKunci ? '/' + semuaTamu.length : '') + ')';
 
   body.querySelectorAll('tr.baris-tamu').forEach(tr => {
     tr.addEventListener('click', function(e){
